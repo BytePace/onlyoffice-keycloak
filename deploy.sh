@@ -335,6 +335,20 @@ log "Waiting for spreadsheet-api ..."
 timeout 60 bash -c 'until curl -sf http://127.0.0.1:8000/health >/dev/null 2>&1; do sleep 3; done'
 success "Spreadsheet API is running."
 
+# Wait for OnlyOffice to initialize (check logs for completion markers)
+log "Waiting for OnlyOffice Document Server to initialize (up to 3 min) ..."
+timeout 180 bash -c '
+until docker logs oo-sso-onlyoffice 2>&1 | grep -qE "Done|listening|ready"; do
+  sleep 5
+done
+' && log "OnlyOffice initialization detected." || warn "OnlyOffice initialization check timed out (may still be initializing)."
+
+# Additional wait for OnlyOffice port to be responsive
+log "Waiting for OnlyOffice HTTP port to respond ..."
+timeout 60 bash -c 'until curl -sf http://127.0.0.1:8091/healthcheck >/dev/null 2>&1; do sleep 2; done' \
+  && success "OnlyOffice Document Server is running." \
+  || warn "OnlyOffice healthcheck timeout (may still be initializing)."
+
 # ── Configure Keycloak realm ──────────────────────────────────────────────────
 log "Configuring Keycloak realm 'onlyoffice' ..."
 SETUP_KC_URL="${KEYCLOAK_SETUP_URL:-$KEYCLOAK_URL}"
