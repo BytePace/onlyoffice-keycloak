@@ -340,25 +340,37 @@ success "Spreadsheet API is running."
 # ── Configure Keycloak realm ──────────────────────────────────────────────────
 log "Configuring Keycloak realm 'onlyoffice' ..."
 SETUP_KC_URL="${KEYCLOAK_SETUP_URL:-$KEYCLOAK_URL}"
-KEYCLOAK_URL="$SETUP_KC_URL" \
+if ! KEYCLOAK_URL="$SETUP_KC_URL" \
 KEYCLOAK_ADMIN_PASSWORD="$KEYCLOAK_ADMIN_PASSWORD" \
 APP_DOMAIN="$APP_DOMAIN" \
 MOBILE_REDIRECT_URI="$MOBILE_REDIRECT_URI" \
-    bash "${SCRIPT_DIR}/scripts/keycloak-realm-setup.sh"
+    bash "${SCRIPT_DIR}/scripts/keycloak-realm-setup.sh"; then
+    warn "Keycloak realm setup failed. Check /tmp/keycloak-setup.log for details."
+    warn "Continuing with deployment..."
+fi
 
-# Retrieve and persist the client secret
-OO_CLIENT_SECRET="$(cat /tmp/oo-client-secret.txt)"
-echo "OO_CLIENT_SECRET=${OO_CLIENT_SECRET}" >> "$ENV_FILE"
-rm -f /tmp/oo-client-secret.txt
+# Retrieve and persist the client secret (if available)
+if [[ -f /tmp/oo-client-secret.txt ]]; then
+    OO_CLIENT_SECRET="$(cat /tmp/oo-client-secret.txt)"
+    echo "OO_CLIENT_SECRET=${OO_CLIENT_SECRET}" >> "$ENV_FILE"
+    rm -f /tmp/oo-client-secret.txt
+    success "Keycloak realm configured."
+else
+    warn "Client secret not found. Keycloak realm setup may have failed."
+fi
 
 # ── Setup nginx ───────────────────────────────────────────────────────────────
 if [[ "$SETUP_NGINX" == true ]]; then
     log "Configuring nginx ..."
-    APP_DOMAIN="$APP_DOMAIN" \
+    if APP_DOMAIN="$APP_DOMAIN" \
     KEYCLOAK_MODE="$KEYCLOAK_MODE" \
     AUTH_DOMAIN="${AUTH_DOMAIN:-}" \
-        bash "${SCRIPT_DIR}/scripts/setup-nginx.sh"
-    success "nginx configured."
+    CERTBOT_EMAIL="$CERTBOT_EMAIL" \
+        bash "${SCRIPT_DIR}/scripts/setup-nginx.sh"; then
+        success "nginx configured."
+    else
+        warn "nginx setup encountered issues. Check /var/log/nginx/error.log"
+    fi
 fi
 
 # ── Run tests ─────────────────────────────────────────────────────────────────

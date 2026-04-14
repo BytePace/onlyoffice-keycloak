@@ -11,7 +11,7 @@
 # Outputs:
 #   /tmp/oo-client-secret.txt — secret for onlyoffice-client
 
-set -euo pipefail
+set -uo pipefail
 
 KEYCLOAK_URL="${KEYCLOAK_URL:?}"
 KEYCLOAK_ADMIN_PASSWORD="${KEYCLOAK_ADMIN_PASSWORD:?}"
@@ -20,8 +20,9 @@ MOBILE_REDIRECT_URI="${MOBILE_REDIRECT_URI:-com.bytepace.scan-it-to-google-sheet
 REALM="onlyoffice"
 MAX_WAIT=120
 
-log()  { echo "[keycloak-setup] $*"; }
-fail() { echo "[keycloak-setup] ERROR: $*" >&2; exit 1; }
+log()  { echo "[keycloak-setup] $*" | tee -a /tmp/keycloak-setup.log; }
+warn() { echo "[keycloak-setup] WARN: $*" >&2 | tee -a /tmp/keycloak-setup.log; }
+fail() { echo "[keycloak-setup] ERROR: $*" >&2 | tee -a /tmp/keycloak-setup.log; exit 1; }
 
 # ── Wait for Keycloak ─────────────────────────────────────────────────────────
 log "Waiting for Keycloak at ${KEYCLOAK_URL} ..."
@@ -33,11 +34,18 @@ done
 log "Keycloak is ready."
 
 # ── Get admin token ───────────────────────────────────────────────────────────
-TOKEN=$(curl -sf -X POST "${KEYCLOAK_URL}/realms/master/protocol/openid-connect/token" \
+log "Obtaining admin token from ${KEYCLOAK_URL}..."
+TOKEN_RESPONSE=$(curl -sf -X POST "${KEYCLOAK_URL}/realms/master/protocol/openid-connect/token" \
     -H "Content-Type: application/x-www-form-urlencoded" \
-    -d "client_id=admin-cli&grant_type=password&username=admin&password=${KEYCLOAK_ADMIN_PASSWORD}" \
-    | jq -r '.access_token')
-[[ -z "$TOKEN" || "$TOKEN" == "null" ]] && fail "Failed to obtain admin token"
+    -d "client_id=admin-cli&grant_type=password&username=admin&password=${KEYCLOAK_ADMIN_PASSWORD}" 2>/tmp/keycloak-curl.err || true)
+
+if [[ -z "$TOKEN_RESPONSE" ]]; then
+    warn "Token response is empty. Error: $(cat /tmp/keycloak-curl.err 2>/dev/null || echo 'unknown')"
+    fail "Failed to obtain admin token"
+fi
+
+TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access_token // empty')
+[[ -z "$TOKEN" || "$TOKEN" == "null" ]] && fail "Failed to obtain admin token. Response: $TOKEN_RESPONSE"
 log "Admin token obtained."
 
 auth_header() { echo "Authorization: Bearer ${TOKEN}"; }
