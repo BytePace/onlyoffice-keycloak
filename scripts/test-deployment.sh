@@ -3,8 +3,7 @@
 
 set -uo pipefail
 
-DOCS_DOMAIN="${DOCS_DOMAIN:?}"
-EDIT_DOMAIN="${EDIT_DOMAIN:?}"
+APP_DOMAIN="${APP_DOMAIN:?}"
 KEYCLOAK_MODE="${KEYCLOAK_MODE:-existing}"
 KEYCLOAK_URL="${KEYCLOAK_URL:-}"
 AUTH_DOMAIN="${AUTH_DOMAIN:-}"
@@ -37,8 +36,7 @@ echo "=== OnlyOffice SSO Deployment Tests ==="
 echo ""
 
 # DNS
-check_dns "$DOCS_DOMAIN"
-check_dns "$EDIT_DOMAIN"
+check_dns "$APP_DOMAIN"
 [[ "$KEYCLOAK_MODE" == "new" && -n "$AUTH_DOMAIN" ]] && check_dns "$AUTH_DOMAIN"
 
 # Docker containers
@@ -62,8 +60,8 @@ done
 # HTTP checks
 echo ""
 echo "--- HTTP endpoints ---"
-check_url "Spreadsheet API health"         "https://${DOCS_DOMAIN}/health"
-check_url "OnlyOffice Docs"                "https://${EDIT_DOMAIN}/healthcheck"
+check_url "Spreadsheet API health"         "https://${APP_DOMAIN}/api/health"
+check_url "OnlyOffice Docs"                "https://${APP_DOMAIN}/editor/healthcheck"
 
 if [[ "$KEYCLOAK_MODE" == "new" && -n "$AUTH_DOMAIN" ]]; then
     check_url "Keycloak OIDC discovery" "https://${AUTH_DOMAIN}/realms/onlyoffice/.well-known/openid-configuration"

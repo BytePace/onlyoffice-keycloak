@@ -5,7 +5,7 @@
 # Required env vars (or args):
 #   KEYCLOAK_URL            — e.g. http://127.0.0.1:8090 (internal) or https://auth.example.com
 #   KEYCLOAK_ADMIN_PASSWORD — admin password
-#   DOCS_DOMAIN             — public domain of the spreadsheet API (for redirect URIs)
+#   APP_DOMAIN              — public domain of the application (for redirect URIs)
 #   MOBILE_REDIRECT_URI     — iOS custom-scheme callback URI
 #
 # Outputs:
@@ -15,7 +15,7 @@ set -euo pipefail
 
 KEYCLOAK_URL="${KEYCLOAK_URL:?}"
 KEYCLOAK_ADMIN_PASSWORD="${KEYCLOAK_ADMIN_PASSWORD:?}"
-DOCS_DOMAIN="${DOCS_DOMAIN:?}"
+APP_DOMAIN="${APP_DOMAIN:?}"
 MOBILE_REDIRECT_URI="${MOBILE_REDIRECT_URI:-com.bytepace.scan-it-to-google-sheets://oauth/callback}"
 REALM="onlyoffice"
 MAX_WAIT=120
@@ -93,9 +93,9 @@ create_client_if_missing "onlyoffice-client" '{
   "standardFlowEnabled": true,
   "directAccessGrantsEnabled": false,
   "serviceAccountsEnabled": true,
-  "redirectUris": ["https://'"${DOCS_DOMAIN}"'/*"],
-  "webOrigins": ["https://'"${DOCS_DOMAIN}"'"],
-  "attributes": {"post.logout.redirect.uris": "https://'"${DOCS_DOMAIN}"'/signed-out"}
+  "redirectUris": ["https://'"${APP_DOMAIN}"'/api/*"],
+  "webOrigins": ["https://'"${APP_DOMAIN}"'"],
+  "attributes": {"post.logout.redirect.uris": "https://'"${APP_DOMAIN}"'/api/signed-out"}
 }'
 
 # Retrieve the generated client secret

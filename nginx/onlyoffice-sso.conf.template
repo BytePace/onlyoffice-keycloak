@@ -1,58 +1,48 @@
-# ── Spreadsheet API ───────────────────────────────────────────────────────────
+# ── Single domain with /api and /editor paths ────────────────────────────────
 server {
     listen 80;
-    server_name {DOCS_DOMAIN};
+    server_name {APP_DOMAIN};
     return 301 https://$host$request_uri;
 }
 
 server {
     listen 443 ssl;
-    server_name {DOCS_DOMAIN};
+    server_name {APP_DOMAIN};
 
-    ssl_certificate     /etc/letsencrypt/live/{DOCS_DOMAIN}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/{DOCS_DOMAIN}/privkey.pem;
+    ssl_certificate     /etc/letsencrypt/live/{APP_DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/{APP_DOMAIN}/privkey.pem;
     ssl_protocols       TLSv1.2 TLSv1.3;
     ssl_ciphers         HIGH:!aNULL:!MD5;
 
-    client_max_body_size 50m;
-
-    location / {
+    # ── Spreadsheet API ────────────────────────────────────────────────────
+    location /api {
         proxy_pass         http://127.0.0.1:8000;
         proxy_set_header   Host              $host;
         proxy_set_header   X-Real-IP         $remote_addr;
         proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
         proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_set_header   X-Forwarded-Path  /api;
         proxy_read_timeout 120s;
+        client_max_body_size 50m;
     }
-}
 
-# ── OnlyOffice Document Server ────────────────────────────────────────────────
-server {
-    listen 80;
-    server_name {EDIT_DOMAIN};
-    return 301 https://$host$request_uri;
-}
-
-server {
-    listen 443 ssl;
-    server_name {EDIT_DOMAIN};
-
-    ssl_certificate     /etc/letsencrypt/live/{EDIT_DOMAIN}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/{EDIT_DOMAIN}/privkey.pem;
-    ssl_protocols       TLSv1.2 TLSv1.3;
-    ssl_ciphers         HIGH:!aNULL:!MD5;
-
-    client_max_body_size 100m;
-
-    location / {
+    # ── OnlyOffice Document Server ─────────────────────────────────────────
+    location /editor {
         proxy_pass         http://127.0.0.1:8091;
         proxy_set_header   Host              $host;
         proxy_set_header   X-Real-IP         $remote_addr;
         proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
         proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_set_header   X-Forwarded-Path  /editor;
         proxy_set_header   Upgrade           $http_upgrade;
         proxy_set_header   Connection        "upgrade";
         proxy_read_timeout 300s;
+        client_max_body_size 100m;
+    }
+
+    # ── Root redirect ──────────────────────────────────────────────────────
+    location / {
+        return 301 https://$host/editor;
     }
 }
 

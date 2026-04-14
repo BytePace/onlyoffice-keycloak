@@ -50,8 +50,7 @@ KEYCLOAK_MODE=""         # existing | new
 KEYCLOAK_URL=""          # used when mode=existing
 KEYCLOAK_ADMIN_PASSWORD=""
 AUTH_DOMAIN=""           # used when mode=new
-DOCS_DOMAIN=""
-EDIT_DOMAIN=""
+APP_DOMAIN=""            # single domain for API and editor
 CERTBOT_EMAIL=""
 MOBILE_REDIRECT_URI="com.bytepace.scan-it-to-google-sheets://oauth/callback"
 SETUP_NGINX=false
@@ -66,8 +65,9 @@ while [[ $# -gt 0 ]]; do
         --keycloak-url)           KEYCLOAK_URL="$2";             shift 2 ;;
         --keycloak-admin-password) KEYCLOAK_ADMIN_PASSWORD="$2"; shift 2 ;;
         --auth-domain)            AUTH_DOMAIN="$2";              shift 2 ;;
-        --docs-domain)            DOCS_DOMAIN="$2";              shift 2 ;;
-        --edit-domain)            EDIT_DOMAIN="$2";              shift 2 ;;
+        --app-domain)             APP_DOMAIN="$2";               shift 2 ;;
+        --docs-domain)            APP_DOMAIN="$2";               shift 2 ;;
+        --edit-domain)            shift 2 ;;
         --certbot-email)          CERTBOT_EMAIL="$2";            shift 2 ;;
         --mobile-redirect-uri)    MOBILE_REDIRECT_URI="$2";      shift 2 ;;
         --setup-nginx)            SETUP_NGINX=true;              shift   ;;
@@ -131,8 +131,7 @@ if [[ -t 0 ]]; then
             read -rp "New Keycloak domain (e.g. auth.example.com): " AUTH_DOMAIN
     fi
 
-    [[ -z "$DOCS_DOMAIN" ]]   && read -rp "Spreadsheet API domain (e.g. docs.example.com): " DOCS_DOMAIN
-    [[ -z "$EDIT_DOMAIN" ]]   && read -rp "OnlyOffice editor domain (e.g. edit.example.com): " EDIT_DOMAIN
+    [[ -z "$APP_DOMAIN" ]]    && read -rp "Application domain (e.g. app.example.com, API at /api, editor at /editor): " APP_DOMAIN
     [[ -z "$CERTBOT_EMAIL" ]] && read -rp "Email for Let's Encrypt certificates: " CERTBOT_EMAIL
 
     read -rp "Configure nginx reverse proxy? [y/N]: " nginx_yn
@@ -141,8 +140,7 @@ fi
 
 # ── Validate inputs ───────────────────────────────────────────────────────────
 [[ -z "$KEYCLOAK_MODE" ]]    && fail "--keycloak-mode required (existing|new)"
-[[ -z "$DOCS_DOMAIN" ]]      && fail "--docs-domain required"
-[[ -z "$EDIT_DOMAIN" ]]      && fail "--edit-domain required"
+[[ -z "$APP_DOMAIN" ]]       && fail "--app-domain required"
 
 if [[ "$KEYCLOAK_MODE" == "existing" ]]; then
     [[ -z "$KEYCLOAK_URL" ]]            && fail "--keycloak-url required for mode=existing"
@@ -185,8 +183,7 @@ cat > "$ENV_FILE" <<EOF
 KEYCLOAK_MODE=${KEYCLOAK_MODE}
 KEYCLOAK_EXTERNAL_URL=${KEYCLOAK_EXTERNAL_URL}
 OIDC_ISSUER_EXTERNAL=${OIDC_ISSUER_EXTERNAL}
-DOCS_DOMAIN=${DOCS_DOMAIN}
-EDIT_DOMAIN=${EDIT_DOMAIN}
+APP_DOMAIN=${APP_DOMAIN}
 ONLYOFFICE_JWT_SECRET=${ONLYOFFICE_JWT_SECRET}
 MOBILE_REDIRECT_URI=${MOBILE_REDIRECT_URI}
 EOF
@@ -213,8 +210,8 @@ COMPOSE_COMMON=$(cat <<YAML
       KEYCLOAK_ISSUER: ${KEYCLOAK_INTERNAL_URL}/realms/onlyoffice
       KEYCLOAK_ISSUER_EXTERNAL: ${OIDC_ISSUER_EXTERNAL}
       ONLYOFFICE_JWT_SECRET: ${ONLYOFFICE_JWT_SECRET}
-      ONLYOFFICE_DOCS_EXTERNAL_URL: https://${EDIT_DOMAIN}
-      API_EXTERNAL_URL: https://${DOCS_DOMAIN}
+      ONLYOFFICE_DOCS_EXTERNAL_URL: https://${APP_DOMAIN}/editor
+      API_EXTERNAL_URL: https://${APP_DOMAIN}/api
       DATA_DIR: /data
     volumes:
       - oo-sso-api-data:/data
@@ -345,7 +342,7 @@ log "Configuring Keycloak realm 'onlyoffice' ..."
 SETUP_KC_URL="${KEYCLOAK_SETUP_URL:-$KEYCLOAK_URL}"
 KEYCLOAK_URL="$SETUP_KC_URL" \
 KEYCLOAK_ADMIN_PASSWORD="$KEYCLOAK_ADMIN_PASSWORD" \
-DOCS_DOMAIN="$DOCS_DOMAIN" \
+APP_DOMAIN="$APP_DOMAIN" \
 MOBILE_REDIRECT_URI="$MOBILE_REDIRECT_URI" \
     bash "${SCRIPT_DIR}/scripts/keycloak-realm-setup.sh"
 
@@ -357,8 +354,7 @@ rm -f /tmp/oo-client-secret.txt
 # ── Setup nginx ───────────────────────────────────────────────────────────────
 if [[ "$SETUP_NGINX" == true ]]; then
     log "Configuring nginx ..."
-    DOCS_DOMAIN="$DOCS_DOMAIN" \
-    EDIT_DOMAIN="$EDIT_DOMAIN" \
+    APP_DOMAIN="$APP_DOMAIN" \
     KEYCLOAK_MODE="$KEYCLOAK_MODE" \
     AUTH_DOMAIN="${AUTH_DOMAIN:-}" \
         bash "${SCRIPT_DIR}/scripts/setup-nginx.sh"
@@ -367,8 +363,7 @@ fi
 
 # ── Run tests ─────────────────────────────────────────────────────────────────
 log "Running deployment tests ..."
-DOCS_DOMAIN="$DOCS_DOMAIN" \
-EDIT_DOMAIN="$EDIT_DOMAIN" \
+APP_DOMAIN="$APP_DOMAIN" \
 KEYCLOAK_MODE="$KEYCLOAK_MODE" \
 KEYCLOAK_URL="${KEYCLOAK_SETUP_URL:-${KEYCLOAK_URL:-}}" \
 AUTH_DOMAIN="${AUTH_DOMAIN:-}" \
@@ -421,8 +416,8 @@ OnlyOffice SSO — Deployment Summary
 Generated: $(date)
 ========================================
 
-Spreadsheet API:  https://${DOCS_DOMAIN}
-OnlyOffice editor: https://${EDIT_DOMAIN}
+Spreadsheet API:  https://${APP_DOMAIN}/api
+OnlyOffice editor: https://${APP_DOMAIN}/editor
 EOF
 [[ "$KEYCLOAK_MODE" == "new" ]] && echo "Keycloak:         https://${AUTH_DOMAIN}" >> "$OUTPUT_FILE"
 cat >> "$OUTPUT_FILE" <<EOF
@@ -433,8 +428,8 @@ EOF
 
 success "=========================================="
 success "Deployment complete!"
-success "  API:    https://${DOCS_DOMAIN}"
-success "  Editor: https://${EDIT_DOMAIN}"
+success "  API:    https://${APP_DOMAIN}/api"
+success "  Editor: https://${APP_DOMAIN}/editor"
 [[ "$KEYCLOAK_MODE" == "new" ]] && success "  Auth:   https://${AUTH_DOMAIN}"
 success ""
 success "Credentials saved to: ${CREDS_FILE}"

@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 # setup-nginx.sh — Installs and configures nginx as reverse proxy.
-# Expected env vars: DOCS_DOMAIN, EDIT_DOMAIN, AUTH_DOMAIN (optional),
+# Expected env vars: APP_DOMAIN, AUTH_DOMAIN (optional),
 #                    KEYCLOAK_MODE (new|existing), NGINX_CONF_TEMPLATE
 
 set -euo pipefail
 
-DOCS_DOMAIN="${DOCS_DOMAIN:?}"
-EDIT_DOMAIN="${EDIT_DOMAIN:?}"
+APP_DOMAIN="${APP_DOMAIN:?}"
 KEYCLOAK_MODE="${KEYCLOAK_MODE:-existing}"
 AUTH_DOMAIN="${AUTH_DOMAIN:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -27,8 +26,7 @@ fi
 
 # Assemble main config
 sed \
-    -e "s|{DOCS_DOMAIN}|${DOCS_DOMAIN}|g" \
-    -e "s|{EDIT_DOMAIN}|${EDIT_DOMAIN}|g" \
+    -e "s|{APP_DOMAIN}|${APP_DOMAIN}|g" \
     "${TEMPLATE_DIR}/onlyoffice-sso.conf.template" \
     | awk -v block="${AUTH_BLOCK}" '{gsub(/{AUTH_SERVER_BLOCK}/, block); print}' \
     > "$CONF_DEST"
