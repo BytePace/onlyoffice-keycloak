@@ -63,13 +63,61 @@ TEMP
     rm -f /etc/nginx/sites-enabled/onlyoffice-sso-temp.conf
 fi
 
-# Assemble main config (with SSL if available)
-if ! sed \
-    -e "s|{APP_DOMAIN}|${APP_DOMAIN}|g" \
-    "${TEMPLATE_DIR}/onlyoffice-sso.conf.template" \
-    | awk -v block="${AUTH_BLOCK}" '{gsub(/{AUTH_SERVER_BLOCK}/, block); print}' \
-    > "$CONF_DEST"; then
-    fail "Failed to generate nginx config"
+# Assemble main config - use HTTP-only if no SSL cert, otherwise use SSL
+if [[ -d "/etc/letsencrypt/live/${APP_DOMAIN}" ]]; then
+    log "Using SSL configuration for ${APP_DOMAIN}"
+    if ! sed \
+        -e "s|{APP_DOMAIN}|${APP_DOMAIN}|g" \
+        "${TEMPLATE_DIR}/onlyoffice-sso.conf.template" \
+        | awk -v block="${AUTH_BLOCK}" '{gsub(/{AUTH_SERVER_BLOCK}/, block); print}' \
+        > "$CONF_DEST"; then
+        fail "Failed to generate nginx config"
+    fi
+else
+    log "No SSL certificate found - using HTTP-only configuration for ${APP_DOMAIN}"
+    # Create HTTP-only config
+    cat > "$CONF_DEST" <<HTTPEOF
+# HTTP-only config for ${APP_DOMAIN}
+# To enable HTTPS: obtain SSL cert with certbot and uncomment the HTTPS block below
+
+server {
+    listen 80;
+    server_name ${APP_DOMAIN};
+
+    # ── Spreadsheet API ────────────────────────────────────────────────────
+    location /api {
+        proxy_pass         http://127.0.0.1:8000;
+        proxy_set_header   Host              \$host;
+        proxy_set_header   X-Real-IP         \$remote_addr;
+        proxy_set_header   X-Forwarded-For   \$proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto \$scheme;
+        proxy_set_header   X-Forwarded-Path  /api;
+        proxy_read_timeout 120s;
+        client_max_body_size 50m;
+    }
+
+    # ── OnlyOffice Document Server ─────────────────────────────────────────
+    location /editor {
+        proxy_pass         http://127.0.0.1:8091;
+        proxy_set_header   Host              \$host;
+        proxy_set_header   X-Real-IP         \$remote_addr;
+        proxy_set_header   X-Forwarded-For   \$proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto \$scheme;
+        proxy_set_header   X-Forwarded-Path  /editor;
+        proxy_set_header   Upgrade           \$http_upgrade;
+        proxy_set_header   Connection        "upgrade";
+        proxy_read_timeout 300s;
+        client_max_body_size 100m;
+    }
+
+    # ── Root redirect ──────────────────────────────────────────────────────
+    location / {
+        return 301 http://\$host/editor;
+    }
+}
+
+${AUTH_BLOCK}
+HTTPEOF
 fi
 
 log "Nginx config written to ${CONF_DEST}"
