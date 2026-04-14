@@ -402,7 +402,7 @@ chmod 600 "$CREDS_FILE"
 MOBILE_CONFIG=$(cat <<JSON
 {
   "onlyoffice": {
-    "api_url": "https://${DOCS_DOMAIN}",
+    "api_url": "https://${APP_DOMAIN}/api",
     "oidc_issuer": "${OIDC_ISSUER_EXTERNAL}",
     "client_id": "onlyoffice-mobile",
     "redirect_uri": "${MOBILE_REDIRECT_URI}"
