@@ -1,0 +1,8 @@
+.env
+deploy-credentials.txt
+deploy-output.txt
+deploy.log
+*.log
+__pycache__/
+*.pyc
+.DS_Store
