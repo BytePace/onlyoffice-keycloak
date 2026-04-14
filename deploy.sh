@@ -14,8 +14,7 @@
 #     --keycloak-mode existing \
 #     --keycloak-url https://auth.example.com \
 #     --keycloak-admin-password "secret" \
-#     --docs-domain docs.example.com \
-#     --edit-domain edit.example.com \
+#     --app-domain app.example.com \
 #     --certbot-email admin@example.com \
 #     --setup-nginx
 #
@@ -23,8 +22,7 @@
 #   sudo bash deploy.sh \
 #     --keycloak-mode new \
 #     --auth-domain auth.example.com \
-#     --docs-domain docs.example.com \
-#     --edit-domain edit.example.com \
+#     --app-domain app.example.com \
 #     --certbot-email admin@example.com \
 #     --setup-nginx
 #
