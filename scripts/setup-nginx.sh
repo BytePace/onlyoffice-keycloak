@@ -29,7 +29,41 @@ if [[ "$KEYCLOAK_MODE" == "new" && -n "$AUTH_DOMAIN" ]]; then
     AUTH_BLOCK=$(sed "s|{AUTH_DOMAIN}|${AUTH_DOMAIN}|g" "${TEMPLATE_DIR}/keycloak-server-block.template")
 fi
 
-# Assemble main config
+# Setup SSL with certbot FIRST (before nginx config with SSL)
+if [[ -n "$CERTBOT_EMAIL" ]] && ! [[ -d "/etc/letsencrypt/live/${APP_DOMAIN}" ]]; then
+    log "Setting up SSL certificate for ${APP_DOMAIN}..."
+    command -v certbot >/dev/null 2>&1 || apt-get install -y certbot python3-certbot-nginx
+
+    # Start nginx temporarily for certbot challenge
+    log "Starting nginx for certificate validation..."
+
+    # Create a simple HTTP-only config for certbot
+    mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
+    cat > /etc/nginx/sites-available/onlyoffice-sso-temp.conf <<'TEMP'
+server {
+    listen 80;
+    server_name {APP_DOMAIN};
+    location / {
+        return 200 "OK";
+    }
+}
+TEMP
+    sed -i "s|{APP_DOMAIN}|${APP_DOMAIN}|g" /etc/nginx/sites-available/onlyoffice-sso-temp.conf
+    ln -sf /etc/nginx/sites-available/onlyoffice-sso-temp.conf /etc/nginx/sites-enabled/onlyoffice-sso-temp.conf
+
+    nginx -t && systemctl reload nginx || log "Failed to start nginx for certbot"
+
+    if certbot certonly --standalone --non-interactive --agree-tos \
+        -m "$CERTBOT_EMAIL" -d "$APP_DOMAIN" 2>&1; then
+        log "SSL certificate obtained for ${APP_DOMAIN}"
+    else
+        warn "Failed to obtain SSL certificate. Continuing without SSL."
+    fi
+
+    rm -f /etc/nginx/sites-enabled/onlyoffice-sso-temp.conf
+fi
+
+# Assemble main config (with SSL if available)
 if ! sed \
     -e "s|{APP_DOMAIN}|${APP_DOMAIN}|g" \
     "${TEMPLATE_DIR}/onlyoffice-sso.conf.template" \
@@ -43,8 +77,8 @@ log "Nginx config written to ${CONF_DEST}"
 # Enable site
 ln -sf "$CONF_DEST" /etc/nginx/sites-enabled/onlyoffice-sso.conf
 
-# Remove default site if present
-rm -f /etc/nginx/sites-enabled/default
+# Remove default and temp sites
+rm -f /etc/nginx/sites-enabled/default /etc/nginx/sites-enabled/onlyoffice-sso-temp.conf
 
 # Test and reload nginx
 if ! nginx -t 2>&1; then
@@ -55,20 +89,11 @@ if ! systemctl reload nginx 2>&1; then
     fail "Failed to reload nginx"
 fi
 
-log "nginx reloaded successfully."
+log "nginx configured and reloaded successfully."
 
-# Setup SSL with certbot if email provided
-if [[ -n "$CERTBOT_EMAIL" ]] && ! [[ -d "/etc/letsencrypt/live/${APP_DOMAIN}" ]]; then
-    log "Setting up SSL certificate for ${APP_DOMAIN}..."
-    command -v certbot >/dev/null 2>&1 || apt-get install -y certbot python3-certbot-nginx
-
-    if certbot certonly --nginx --non-interactive --agree-tos \
-        -m "$CERTBOT_EMAIL" -d "$APP_DOMAIN" 2>&1; then
-        log "SSL certificate obtained for ${APP_DOMAIN}"
-        systemctl reload nginx
-    else
-        warn "Failed to obtain SSL certificate. Check certbot logs."
-    fi
+# Verify SSL certificate
+if [[ -d "/etc/letsencrypt/live/${APP_DOMAIN}" ]]; then
+    log "SSL certificate verified for ${APP_DOMAIN}"
 else
-    [[ -d "/etc/letsencrypt/live/${APP_DOMAIN}" ]] && log "SSL certificate already exists for ${APP_DOMAIN}"
+    warn "SSL certificate not found for ${APP_DOMAIN} - using HTTP only"
 fi

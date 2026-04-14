@@ -403,7 +403,7 @@ fi
 cat >> "$CREDS_FILE" <<EOF
 
 OIDC Issuer:             ${OIDC_ISSUER_EXTERNAL}
-onlyoffice-client secret: ${OO_CLIENT_SECRET}
+onlyoffice-client secret: ${OO_CLIENT_SECRET:-"(not configured - keycloak realm setup failed)"}
 OnlyOffice JWT secret:   ${ONLYOFFICE_JWT_SECRET}
 EOF
 chmod 600 "$CREDS_FILE"

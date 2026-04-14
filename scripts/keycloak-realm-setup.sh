@@ -24,10 +24,16 @@ log()  { echo "[keycloak-setup] $*" | tee -a /tmp/keycloak-setup.log; }
 warn() { echo "[keycloak-setup] WARN: $*" >&2 | tee -a /tmp/keycloak-setup.log; }
 fail() { echo "[keycloak-setup] ERROR: $*" >&2 | tee -a /tmp/keycloak-setup.log; exit 1; }
 
+# ── Ensure KEYCLOAK_URL has https:// ──────────────────────────────────────────
+if [[ ! "$KEYCLOAK_URL" =~ ^https?:// ]]; then
+    KEYCLOAK_URL="https://${KEYCLOAK_URL}"
+    log "Added https:// to Keycloak URL: ${KEYCLOAK_URL}"
+fi
+
 # ── Wait for Keycloak ─────────────────────────────────────────────────────────
 log "Waiting for Keycloak at ${KEYCLOAK_URL} ..."
 elapsed=0
-until curl -sf "${KEYCLOAK_URL}/realms/master/.well-known/openid-configuration" >/dev/null 2>&1; do
+until curl -sfL "${KEYCLOAK_URL}/realms/master/.well-known/openid-configuration" >/dev/null 2>&1; do
     sleep 3; elapsed=$((elapsed + 3))
     [[ $elapsed -ge $MAX_WAIT ]] && fail "Keycloak did not become ready in ${MAX_WAIT}s"
 done
@@ -35,7 +41,7 @@ log "Keycloak is ready."
 
 # ── Get admin token ───────────────────────────────────────────────────────────
 log "Obtaining admin token from ${KEYCLOAK_URL}..."
-TOKEN_RESPONSE=$(curl -sf -X POST "${KEYCLOAK_URL}/realms/master/protocol/openid-connect/token" \
+TOKEN_RESPONSE=$(curl -sfL -X POST "${KEYCLOAK_URL}/realms/master/protocol/openid-connect/token" \
     -H "Content-Type: application/x-www-form-urlencoded" \
     -d "client_id=admin-cli&grant_type=password&username=admin&password=${KEYCLOAK_ADMIN_PASSWORD}" 2>/tmp/keycloak-curl.err || true)
 
