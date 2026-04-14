@@ -34,32 +34,54 @@ if [[ -n "$CERTBOT_EMAIL" ]] && ! [[ -d "/etc/letsencrypt/live/${APP_DOMAIN}" ]]
     log "Setting up SSL certificate for ${APP_DOMAIN}..."
     command -v certbot >/dev/null 2>&1 || apt-get install -y certbot python3-certbot-nginx
 
-    # Start nginx temporarily for certbot challenge
-    log "Starting nginx for certificate validation..."
+    # Create webroot directory for certbot validation
+    WEBROOT="/var/www/letsencrypt"
+    mkdir -p "$WEBROOT"
 
-    # Create a simple HTTP-only config for certbot
+    # Create simple HTTP-only config for webroot validation
+    log "Configuring nginx for certificate validation..."
     mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
-    cat > /etc/nginx/sites-available/onlyoffice-sso-temp.conf <<'TEMP'
+    cat > /etc/nginx/sites-available/onlyoffice-sso-temp.conf <<TEMP
 server {
     listen 80;
-    server_name {APP_DOMAIN};
+    server_name ${APP_DOMAIN};
+    root ${WEBROOT};
+    location /.well-known/acme-challenge/ {
+        allow all;
+    }
     location / {
-        return 200 "OK";
+        return 301 https://\$host\$request_uri;
     }
 }
 TEMP
-    sed -i "s|{APP_DOMAIN}|${APP_DOMAIN}|g" /etc/nginx/sites-available/onlyoffice-sso-temp.conf
+
     ln -sf /etc/nginx/sites-available/onlyoffice-sso-temp.conf /etc/nginx/sites-enabled/onlyoffice-sso-temp.conf
 
-    nginx -t && systemctl reload nginx || log "Failed to start nginx for certbot"
+    # Test and reload nginx
+    if nginx -t 2>&1 && systemctl reload nginx 2>&1; then
+        log "nginx configured for certificate validation"
 
-    if certbot certonly --standalone --non-interactive --agree-tos \
-        -m "$CERTBOT_EMAIL" -d "$APP_DOMAIN" 2>&1; then
-        log "SSL certificate obtained for ${APP_DOMAIN}"
+        # Get certificate using webroot mode (non-blocking)
+        if certbot certonly --webroot -w "$WEBROOT" --non-interactive --agree-tos \
+            -m "$CERTBOT_EMAIL" -d "$APP_DOMAIN" 2>&1; then
+            log "SSL certificate obtained for ${APP_DOMAIN}"
+        else
+            warn "Failed to obtain SSL certificate with webroot. Trying standalone mode..."
+            # Fallback: try standalone (stop nginx temporarily)
+            systemctl stop nginx 2>/dev/null || true
+            if certbot certonly --standalone --non-interactive --agree-tos \
+                -m "$CERTBOT_EMAIL" -d "$APP_DOMAIN" 2>&1; then
+                log "SSL certificate obtained for ${APP_DOMAIN} (standalone mode)"
+            else
+                warn "Failed to obtain SSL certificate. Continuing without SSL."
+            fi
+            systemctl start nginx 2>/dev/null || true
+        fi
     else
-        warn "Failed to obtain SSL certificate. Continuing without SSL."
+        warn "Failed to configure nginx for validation. Skipping SSL setup."
     fi
 
+    # Clean up temporary config
     rm -f /etc/nginx/sites-enabled/onlyoffice-sso-temp.conf
 fi
 
