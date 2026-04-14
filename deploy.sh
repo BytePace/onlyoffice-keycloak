@@ -81,7 +81,7 @@ done
 # ── Rollback ──────────────────────────────────────────────────────────────────
 if [[ "$ROLLBACK" == true ]]; then
     log "Rolling back OnlyOffice SSO deployment ..."
-    cd "${DEPLOY_DIR}" 2>/dev/null && docker compose down || true
+    cd "${DEPLOY_DIR}" 2>/dev/null && docker-compose down || true
     if [[ "$DELETE_ALL" == true ]]; then
         docker volume rm oo-sso-api-data oo-sso-onlyoffice-data oo-sso-onlyoffice-logs \
                          oo-sso-keycloak-db 2>/dev/null || true
@@ -100,7 +100,7 @@ fi
 for cmd in docker curl openssl jq; do
     command -v "$cmd" >/dev/null 2>&1 || fail "Required tool not found: $cmd"
 done
-docker compose version >/dev/null 2>&1 || fail "docker compose (v2) not found"
+docker-compose --version >/dev/null 2>&1 || fail "docker-compose not found"
 
 mkdir -p "${DEPLOY_DIR}"
 touch "${LOG_FILE}"
@@ -325,17 +325,17 @@ cd "${DEPLOY_DIR}"
 log "Starting containers (docker compose up --build) ..."
 
 if [[ "$KEYCLOAK_MODE" == "new" ]]; then
-    docker compose up -d --build postgres-keycloak
+    docker-compose up -d --build postgres-keycloak
     log "Waiting for PostgreSQL ..."
     timeout 60 bash -c 'until docker exec oo-sso-postgres pg_isready -U keycloak -d keycloak >/dev/null 2>&1; do sleep 2; done'
 
-    docker compose up -d --build keycloak
+    docker-compose up -d --build keycloak
     log "Waiting for Keycloak to start (up to 5 min) ..."
     timeout 300 bash -c 'until docker logs oo-sso-keycloak 2>&1 | grep -q "Running the server"; do sleep 5; done'
     success "Keycloak is running."
 fi
 
-docker compose up -d --build spreadsheet-api onlyoffice-docs
+docker-compose up -d --build spreadsheet-api onlyoffice-docs
 log "Waiting for spreadsheet-api ..."
 timeout 60 bash -c 'until curl -sf http://127.0.0.1:8000/health >/dev/null 2>&1; do sleep 3; done'
 success "Spreadsheet API is running."
