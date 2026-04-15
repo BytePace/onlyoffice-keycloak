@@ -1,11 +1,8 @@
 import os
-import logging
 
 import httpx
 from fastapi import HTTPException, Request
 from jose import JWTError, jwt
-
-logger = logging.getLogger(__name__)
 
 # Internal issuer used for JWKS fetch (container-to-container)
 KEYCLOAK_ISSUER = os.getenv("KEYCLOAK_ISSUER", "")
@@ -43,10 +40,6 @@ async def get_current_user(request: Request) -> dict:
     elif "access_token" in request.cookies:
         token = request.cookies["access_token"]
 
-    # Debug: log what we found
-    has_bearer = bool(auth_header.startswith("Bearer "))
-    has_cookie = "access_token" in request.cookies
-    logger.info(f"[AUTH] Bearer: {has_bearer}, Cookie: {has_cookie}, Header: {auth_header[:20]}, Cookies: {list(request.cookies.keys())}")
 
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -60,12 +53,9 @@ async def get_current_user(request: Request) -> dict:
             issuer=KEYCLOAK_ISSUER_EXTERNAL,
             options={"verify_aud": False},
         )
-        logger.info(f"[AUTH] Token validated successfully for user: {payload.get('sub')}")
         return payload
     except JWTError as exc:
-        logger.error(f"[AUTH] JWT decode error: {exc}")
         invalidate_jwks_cache()  # Force JWKS refresh on next request
         raise HTTPException(status_code=401, detail=f"Invalid token: {exc}")
     except Exception as exc:
-        logger.error(f"[AUTH] Authentication error: {exc}")
         raise HTTPException(status_code=401, detail=f"Authentication failed: {exc}")
