@@ -1,10 +1,8 @@
 import os
 import logging
-from typing import Optional
 
 import httpx
-from fastapi import HTTPException, Security, Request, Cookie
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi import HTTPException, Request
 from jose import JWTError, jwt
 
 logger = logging.getLogger(__name__)
@@ -13,8 +11,6 @@ logger = logging.getLogger(__name__)
 KEYCLOAK_ISSUER = os.getenv("KEYCLOAK_ISSUER", "")
 # External issuer embedded in tokens (public URL)
 KEYCLOAK_ISSUER_EXTERNAL = os.getenv("KEYCLOAK_ISSUER_EXTERNAL", KEYCLOAK_ISSUER)
-
-bearer = HTTPBearer()
 
 _jwks_cache: dict | None = None
 
@@ -35,24 +31,22 @@ def invalidate_jwks_cache() -> None:
     _jwks_cache = None
 
 
-async def get_current_user(
-    request: Request,
-    credentials: Optional[HTTPAuthorizationCredentials] = Security(bearer),
-) -> dict:
+async def get_current_user(request: Request) -> dict:
     """Get current user from Bearer token or cookie"""
     token = None
 
-    # Try Bearer token first
-    if credentials and credentials.credentials:
-        token = credentials.credentials
+    # Try Bearer token from Authorization header
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:]  # Remove "Bearer " prefix
     # Fall back to cookie
     elif "access_token" in request.cookies:
         token = request.cookies["access_token"]
 
     # Debug: log what we found
-    has_bearer = bool(credentials and credentials.credentials)
+    has_bearer = bool(auth_header.startswith("Bearer "))
     has_cookie = "access_token" in request.cookies
-    logger.info(f"[AUTH] Bearer: {has_bearer}, Cookie: {has_cookie}, All Cookies: {dict(request.cookies)}")
+    logger.info(f"[AUTH] Bearer: {has_bearer}, Cookie: {has_cookie}, Header: {auth_header[:20]}, Cookies: {list(request.cookies.keys())}")
 
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
