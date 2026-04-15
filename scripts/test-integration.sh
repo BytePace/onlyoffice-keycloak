@@ -131,7 +131,7 @@ fi
 # ── Test 4: List workspaces ──────────────────────────────────────────────────
 log "▶ Fetching workspaces..."
 WORKSPACES=$(curl -s -H "Authorization: Bearer ${TOKEN}" \
-    "https://${APP_DOMAIN}/api/api/orgs/1/workspaces" 2>/dev/null)
+    "https://${APP_DOMAIN}/api/orgs/1/workspaces" 2>/dev/null)
 
 if echo "$WORKSPACES" | jq -e '.[0].id' >/dev/null 2>&1; then
     success "Workspaces retrieved"
@@ -146,7 +146,7 @@ fi
 # ── Test 5: Create a test document ────────────────────────────────────────────
 log "▶ Creating test document..."
 DOC_NAME="Integration Test $(date +%s)"
-DOC_RESPONSE=$(curl -s -X POST "https://${APP_DOMAIN}/api/api/workspaces/1/docs" \
+DOC_RESPONSE=$(curl -s -X POST "https://${APP_DOMAIN}/api/workspaces/1/docs" \
     -H "Authorization: Bearer ${TOKEN}" \
     -H "Content-Type: application/json" \
     -d "{\"name\": \"${DOC_NAME}\"}")
@@ -163,7 +163,7 @@ fi
 # ── Test 6: Create tables in document ────────────────────────────────────────
 log "▶ Creating table in document..."
 TABLE_RESPONSE=$(curl -s -X POST \
-    "https://${APP_DOMAIN}/api/api/docs/${DOC_ID}/tables" \
+    "https://${APP_DOMAIN}/api/docs/${DOC_ID}/tables" \
     -H "Authorization: Bearer ${TOKEN}" \
     -H "Content-Type: application/json" \
     -d @- <<'EOF'
@@ -191,7 +191,7 @@ fi
 # ── Test 7: Add sample data ──────────────────────────────────────────────────
 log "▶ Adding sample data to table..."
 DATA_RESPONSE=$(curl -s -X POST \
-    "https://${APP_DOMAIN}/api/api/docs/${DOC_ID}/tables/Sheet1/records" \
+    "https://${APP_DOMAIN}/api/docs/${DOC_ID}/tables/Sheet1/records" \
     -H "Authorization: Bearer ${TOKEN}" \
     -H "Content-Type: application/json" \
     -d @- <<'EOF'
@@ -225,7 +225,7 @@ fi
 # ── Test 8: Fetch document data ──────────────────────────────────────────────
 log "▶ Fetching document records..."
 RECORDS=$(curl -s -H "Authorization: Bearer ${TOKEN}" \
-    "https://${APP_DOMAIN}/api/api/docs/${DOC_ID}/tables/Sheet1/records")
+    "https://${APP_DOMAIN}/api/docs/${DOC_ID}/tables/Sheet1/records")
 
 RECORD_COUNT=$(echo "$RECORDS" | jq -r '.records | length' 2>/dev/null || echo "0")
 if [[ "$RECORD_COUNT" -gt 0 ]]; then
@@ -237,7 +237,7 @@ fi
 # ── Test 9: OnlyOffice editor access ──────────────────────────────────────────
 log "▶ Testing OnlyOffice editor endpoint..."
 EDITOR_RESPONSE=$(curl -s -w "\n%{http_code}" -H "Authorization: Bearer ${TOKEN}" \
-    "https://${APP_DOMAIN}/api/api/docs/${DOC_ID}/editor")
+    "https://${APP_DOMAIN}/api/docs/${DOC_ID}/editor")
 
 HTTP_CODE=$(echo "$EDITOR_RESPONSE" | tail -1)
 if [[ "$HTTP_CODE" == "200" ]]; then
@@ -260,14 +260,14 @@ echo "   Document Name: Integration Test $(date +%s)"
 echo ""
 echo "🔗 Access URLs:"
 echo "   ✓ API:      https://${APP_DOMAIN}/api"
-echo "   ✓ Editor:   https://${APP_DOMAIN}/api/api/docs/${DOC_ID}/editor"
+echo "   ✓ Editor:   https://${APP_DOMAIN}/api/docs/${DOC_ID}/editor"
 echo ""
 echo "📱 cURL command to fetch records:"
 echo "   curl -H 'Authorization: Bearer \$TOKEN' \\"
-echo "     'https://${APP_DOMAIN}/api/api/docs/${DOC_ID}/tables/Sheet1/records' | jq"
+echo "     'https://${APP_DOMAIN}/api/docs/${DOC_ID}/tables/Sheet1/records' | jq"
 echo ""
 echo "🌐 Open in browser:"
-echo "   https://${APP_DOMAIN}/api/api/docs/${DOC_ID}/editor"
+echo "   https://${APP_DOMAIN}/api/docs/${DOC_ID}/editor"
 echo ""
 echo "💾 To use this token:"
 echo "   export TOKEN='${TOKEN}'"

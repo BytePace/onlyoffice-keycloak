@@ -21,7 +21,7 @@ async def health():
 
 # ── Document list (Grist-compatible) ──────────────────────────────────────────
 
-@app.get("/api/orgs/{org_id}/workspaces")
+@app.get("/orgs/{org_id}/workspaces")
 async def list_workspaces(org_id: str, user: dict = Depends(get_current_user)):
     docs = storage.list_documents()
     return [
@@ -35,7 +35,7 @@ async def list_workspaces(org_id: str, user: dict = Depends(get_current_user)):
 
 # ── Document creation (Grist-compatible) ─────────────────────────────────────
 
-@app.post("/api/workspaces/{workspace_id}/docs")
+@app.post("/workspaces/{workspace_id}/docs")
 async def create_doc(
     workspace_id: int,
     req: CreateDocRequest,
@@ -45,7 +45,7 @@ async def create_doc(
     return doc["id"]
 
 
-@app.post("/api/docs/{doc_id}/tables")
+@app.post("/docs/{doc_id}/tables")
 async def create_tables(
     doc_id: str,
     req: CreateTablesRequest,
@@ -64,7 +64,7 @@ async def create_tables(
 
 # ── Row operations (Grist-compatible) ────────────────────────────────────────
 
-@app.post("/api/docs/{doc_id}/tables/{table_id}/records")
+@app.post("/docs/{doc_id}/tables/{table_id}/records")
 async def add_records(
     doc_id: str,
     table_id: str,
@@ -83,7 +83,7 @@ async def add_records(
     return {}
 
 
-@app.get("/api/docs/{doc_id}/tables/{table_id}/records")
+@app.get("/docs/{doc_id}/tables/{table_id}/records")
 async def get_records(
     doc_id: str,
     table_id: str,
@@ -99,7 +99,7 @@ async def get_records(
 
 # ── OnlyOffice browser editor ─────────────────────────────────────────────────
 
-@app.get("/api/docs/{doc_id}/editor", response_class=HTMLResponse)
+@app.get("/docs/{doc_id}/editor", response_class=HTMLResponse)
 async def get_editor(doc_id: str, user: dict = Depends(get_current_user)):
     meta = storage.get_document_meta(doc_id)
     if not meta:
@@ -116,7 +116,7 @@ async def get_editor(doc_id: str, user: dict = Depends(get_current_user)):
     return HTMLResponse(content=onlyoffice.render_editor_html(config))
 
 
-@app.get("/api/docs/{doc_id}/file.xlsx")
+@app.get("/docs/{doc_id}/file.xlsx")
 async def get_file(doc_id: str):
     """Called by OnlyOffice Document Server to fetch the file — no user auth."""
     xlsx_path = storage.get_xlsx_path(doc_id)
@@ -129,7 +129,7 @@ async def get_file(doc_id: str):
     )
 
 
-@app.post("/api/docs/{doc_id}/callback")
+@app.post("/docs/{doc_id}/callback")
 async def onlyoffice_callback(doc_id: str, body: dict):
     """
     OnlyOffice save callback.
