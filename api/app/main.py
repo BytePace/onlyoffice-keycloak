@@ -21,11 +21,12 @@ CLIENT_ID = "onlyoffice-client"
 CLIENT_SECRET = os.getenv("OO_CLIENT_SECRET", "")
 
 
-# ── Custom exception handler for 401 on editor endpoints ──────────────────────
+# ── Custom exception handler for 401/403 on editor endpoints ──────────────────
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     """Redirect to OAuth login if accessing editor without auth"""
-    if exc.status_code == 401 and "/docs/" in request.url.path and "/editor" in request.url.path:
+    # Redirect on 401 or 403 for editor endpoints
+    if exc.status_code in [401, 403] and "/docs/" in request.url.path and "/editor" in request.url.path:
         # Extract doc_id from path
         path_parts = request.url.path.split("/")
         doc_id = ""

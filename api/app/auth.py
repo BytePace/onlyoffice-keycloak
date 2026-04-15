@@ -1,4 +1,5 @@
 import os
+from typing import Optional
 
 import httpx
 from fastapi import HTTPException, Security, Request, Cookie
@@ -33,13 +34,13 @@ def invalidate_jwks_cache() -> None:
 
 async def get_current_user(
     request: Request,
-    credentials: HTTPAuthorizationCredentials = Security(bearer),
+    credentials: Optional[HTTPAuthorizationCredentials] = Security(bearer),
 ) -> dict:
     """Get current user from Bearer token or cookie"""
     token = None
 
     # Try Bearer token first
-    if credentials:
+    if credentials and credentials.credentials:
         token = credentials.credentials
     # Fall back to cookie
     elif "access_token" in request.cookies:
