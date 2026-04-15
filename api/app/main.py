@@ -89,33 +89,33 @@ async def root(request: Request):
         user_name = user.get("name") or user.get("preferred_username", "User")
 
         # Token is valid, show dashboard
-        return HTMLResponse(f"""<!DOCTYPE html>
+        return HTMLResponse("""<!DOCTYPE html>
 <html>
 <head>
     <title>OnlyOffice Spreadsheet</title>
     <style>
-        body {{ font-family: Arial, sans-serif; margin: 0; background: #f5f5f5; }}
-        .header {{ background: #007bff; color: white; padding: 20px; text-align: center; }}
-        .container {{ max-width: 800px; margin: 40px auto; background: white; padding: 40px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
-        h1 {{ color: #333; margin-top: 0; }}
-        h2 {{ color: #333; margin-top: 30px; }}
-        p {{ color: #666; }}
-        .button {{ display: inline-block; padding: 12px 24px; background: #007bff; color: white; text-decoration: none; border-radius: 4px; margin: 10px 0; border: none; cursor: pointer; font-size: 16px; }}
-        .button:hover {{ background: #0056b3; }}
-        ul {{ list-style: none; padding: 0; }}
-        li {{ padding: 10px; margin: 5px 0; background: #f9f9f9; border-radius: 4px; }}
-        a {{ color: #007bff; text-decoration: none; }}
-        a:hover {{ text-decoration: underline; }}
-        .logout {{ float: right; font-size: 14px; }}
+        body { font-family: Arial, sans-serif; margin: 0; background: #f5f5f5; }
+        .header { background: #007bff; color: white; padding: 20px; text-align: center; }
+        .container { max-width: 800px; margin: 40px auto; background: white; padding: 40px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h1 { color: #333; margin-top: 0; }
+        h2 { color: #333; margin-top: 30px; }
+        p { color: #666; }
+        .button { display: inline-block; padding: 12px 24px; background: #007bff; color: white; text-decoration: none; border-radius: 4px; margin: 10px 0; border: none; cursor: pointer; font-size: 16px; }
+        .button:hover { background: #0056b3; }
+        ul { list-style: none; padding: 0; }
+        li { padding: 10px; margin: 5px 0; background: #f9f9f9; border-radius: 4px; }
+        a { color: #007bff; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .logout { float: right; font-size: 14px; }
     </style>
 </head>
 <body>
     <div class="header">
         <h1 style="margin: 0;">OnlyOffice Spreadsheet</h1>
-        <p style="margin: 10px 0 0 0;">Welcome, {user_name}!</p>
+        <p style="margin: 10px 0 0 0;">Welcome, {0}!</p>
     </div>
     <div class="container">
-        {docs_html}
+        {1}
 
         <h2>Create New Document</h2>
         <form onsubmit="createDocument(event)">
@@ -128,7 +128,7 @@ async def root(request: Request):
         <ul>
             <li><code>GET /docs</code> - List your documents</li>
             <li><code>POST /workspaces/1/docs</code> - Create a new document</li>
-            <li><code>GET /docs/{{doc_id}}</code> - Open a document in browser</li>
+            <li><code>GET /docs/{'{doc_id}'}</code> - Open a document in browser</li>
         </ul>
 
         <div class="logout" style="margin-top: 40px; text-align: right;">
@@ -137,37 +137,34 @@ async def root(request: Request):
     </div>
 
     <script>
-        async function createDocument(event) {{
+        async function createDocument(event) {
             event.preventDefault();
             const docName = document.getElementById('docName').value;
             const token = document.cookie.split('; ').find(row => row.startsWith('access_token=')).split('=')[1];
 
-            try {{
-                const response = await fetch('https://sheets.bytepace.com/api/workspaces/1/docs', {{
+            try {
+                const response = await fetch('https://sheets.bytepace.com/api/workspaces/1/docs', {
                     method: 'POST',
-                    headers: {{
+                    headers: {
                         'Authorization': 'Bearer ' + token,
                         'Content-Type': 'application/json'
-                    }},
-                    body: JSON.stringify({{ name: docName }})
-                }});
+                    },
+                    body: JSON.stringify({ name: docName })
+                });
 
-                if (response.ok) {{
+                if (response.ok) {
                     const docId = await response.json();
                     window.location.href = '/api/docs/' + docId;
-                }} else {{
+                } else {
                     alert('Failed to create document');
-                }}
-            }} catch (error) {{
+                }
+            } catch (error) {
                 alert('Error: ' + error.message);
-            }}
-        }}
+            }
+        }
     </script>
 </body>
-</html>""")
-    </div>
-</body>
-</html>""")
+</html>""".format(user_name, docs_html))
     except HTTPException:
         # Token is invalid, redirect to login
         return RedirectResponse(url="/api/oauth/login", status_code=302)
