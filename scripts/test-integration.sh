@@ -145,10 +145,11 @@ fi
 
 # ── Test 5: Create a test document ────────────────────────────────────────────
 log "▶ Creating test document..."
+DOC_NAME="Integration Test $(date +%s)"
 DOC_RESPONSE=$(curl -s -X POST "https://${APP_DOMAIN}/api/api/workspaces/1/docs" \
     -H "Authorization: Bearer ${TOKEN}" \
     -H "Content-Type: application/json" \
-    -d '{"name": "Integration Test ' $(date +%s) '"}')
+    -d "{\"name\": \"${DOC_NAME}\"}")
 
 DOC_ID=$(echo "$DOC_RESPONSE" | jq -r '.' 2>/dev/null || echo "")
 
@@ -165,18 +166,21 @@ TABLE_RESPONSE=$(curl -s -X POST \
     "https://${APP_DOMAIN}/api/api/docs/${DOC_ID}/tables" \
     -H "Authorization: Bearer ${TOKEN}" \
     -H "Content-Type: application/json" \
-    -d '{
-      "tables": [
-        {
-          "id": "Sheet1",
-          "columns": [
-            {"id": "A"},
-            {"id": "B"},
-            {"id": "C"}
-          ]
-        }
+    -d @- <<'EOF'
+{
+  "tables": [
+    {
+      "id": "Sheet1",
+      "columns": [
+        {"id": "A"},
+        {"id": "B"},
+        {"id": "C"}
       ]
-    }')
+    }
+  ]
+}
+EOF
+)
 
 if echo "$TABLE_RESPONSE" | jq -e '.' >/dev/null 2>&1; then
     success "Table created"
@@ -190,24 +194,27 @@ DATA_RESPONSE=$(curl -s -X POST \
     "https://${APP_DOMAIN}/api/api/docs/${DOC_ID}/tables/Sheet1/records" \
     -H "Authorization: Bearer ${TOKEN}" \
     -H "Content-Type: application/json" \
-    -d '{
-      "records": [
-        {
-          "fields": {
-            "A": "Name",
-            "B": "Email",
-            "C": "Date"
-          }
-        },
-        {
-          "fields": {
-            "A": "Test User",
-            "B": "test@example.com",
-            "C": "2026-04-15"
-          }
-        }
-      ]
-    }')
+    -d @- <<'EOF'
+{
+  "records": [
+    {
+      "fields": {
+        "A": "Name",
+        "B": "Email",
+        "C": "Date"
+      }
+    },
+    {
+      "fields": {
+        "A": "Test User",
+        "B": "test@example.com",
+        "C": "2026-04-15"
+      }
+    }
+  ]
+}
+EOF
+)
 
 if echo "$DATA_RESPONSE" | jq -e '.' >/dev/null 2>&1; then
     success "Sample data added"
