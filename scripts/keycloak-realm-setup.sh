@@ -105,7 +105,7 @@ create_client_if_missing "onlyoffice-client" '{
   "protocol": "openid-connect",
   "publicClient": false,
   "standardFlowEnabled": true,
-  "directAccessGrantsEnabled": false,
+  "directAccessGrantsEnabled": true,
   "serviceAccountsEnabled": true,
   "redirectUris": ["https://'"${APP_DOMAIN}"'/api/*"],
   "webOrigins": ["https://'"${APP_DOMAIN}"'"],
