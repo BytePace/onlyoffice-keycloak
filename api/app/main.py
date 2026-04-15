@@ -73,30 +73,98 @@ async def root(request: Request):
 
     # Try to validate token
     try:
-        await get_current_user(request, None)
-        # Token is valid, show dashboard or redirect to editor
-        return HTMLResponse("""<!DOCTYPE html>
+        user = await get_current_user(request, None)
+        # Token is valid, show list of documents
+        docs = storage.list_documents()
+
+        docs_html = ""
+        if docs:
+            docs_html = "<h2>Your Documents</h2><ul style='text-align: left; display: inline-block;'>"
+            for doc in docs:
+                docs_html += f'<li><a href="/api/docs/{doc["id"]}" style="color: #007bff; text-decoration: none;">{doc.get("title", doc["id"])}</a></li>'
+            docs_html += "</ul>"
+        else:
+            docs_html = "<p>No documents yet. <a href='#' onclick='createDoc()' style='color: #007bff;'>Create one now</a></p>"
+
+        user_name = user.get("name") or user.get("preferred_username", "User")
+
+        # Token is valid, show dashboard
+        return HTMLResponse(f"""<!DOCTYPE html>
 <html>
 <head>
     <title>OnlyOffice Spreadsheet</title>
     <style>
-        body { font-family: Arial, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #f5f5f5; }
-        .container { background: white; padding: 40px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); max-width: 600px; text-align: center; }
-        h1 { color: #333; }
-        p { color: #666; margin: 20px 0; }
-        .button { display: inline-block; padding: 12px 24px; background: #007bff; color: white; text-decoration: none; border-radius: 4px; margin: 10px; }
-        .button:hover { background: #0056b3; }
+        body {{ font-family: Arial, sans-serif; margin: 0; background: #f5f5f5; }}
+        .header {{ background: #007bff; color: white; padding: 20px; text-align: center; }}
+        .container {{ max-width: 800px; margin: 40px auto; background: white; padding: 40px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+        h1 {{ color: #333; margin-top: 0; }}
+        h2 {{ color: #333; margin-top: 30px; }}
+        p {{ color: #666; }}
+        .button {{ display: inline-block; padding: 12px 24px; background: #007bff; color: white; text-decoration: none; border-radius: 4px; margin: 10px 0; border: none; cursor: pointer; font-size: 16px; }}
+        .button:hover {{ background: #0056b3; }}
+        ul {{ list-style: none; padding: 0; }}
+        li {{ padding: 10px; margin: 5px 0; background: #f9f9f9; border-radius: 4px; }}
+        a {{ color: #007bff; text-decoration: none; }}
+        a:hover {{ text-decoration: underline; }}
+        .logout {{ float: right; font-size: 14px; }}
     </style>
 </head>
 <body>
+    <div class="header">
+        <h1 style="margin: 0;">OnlyOffice Spreadsheet</h1>
+        <p style="margin: 10px 0 0 0;">Welcome, {user_name}!</p>
+    </div>
     <div class="container">
-        <h1>OnlyOffice Spreadsheet API</h1>
-        <p>You are authenticated. Please use the REST API or open the OnlyOffice editor.</p>
-        <p>To create a new document:</p>
-        <pre>curl -X POST https://sheets.bytepace.com/api/workspaces/1/docs \\
-  -H "Authorization: Bearer YOUR_TOKEN" \\
-  -H "Content-Type: application/json" \\
-  -d '{"name": "My Document"}'</pre>
+        {docs_html}
+
+        <h2>Create New Document</h2>
+        <form onsubmit="createDocument(event)">
+            <input type="text" id="docName" placeholder="Document name" required style="padding: 8px; width: 100%; max-width: 300px; margin: 10px 0;">
+            <button type="submit" class="button">Create</button>
+        </form>
+
+        <h2>API Usage</h2>
+        <p>You can also use the REST API to manage your documents:</p>
+        <ul>
+            <li><code>GET /docs</code> - List your documents</li>
+            <li><code>POST /workspaces/1/docs</code> - Create a new document</li>
+            <li><code>GET /docs/{{doc_id}}</code> - Open a document in browser</li>
+        </ul>
+
+        <div class="logout" style="margin-top: 40px; text-align: right;">
+            <a href="https://auth.bytepace.com/realms/onlyoffice/protocol/openid-connect/logout?redirect_uri=https://sheets.bytepace.com/api/" onclick="alert('You have been logged out')">Logout</a>
+        </div>
+    </div>
+
+    <script>
+        async function createDocument(event) {{
+            event.preventDefault();
+            const docName = document.getElementById('docName').value;
+            const token = document.cookie.split('; ').find(row => row.startsWith('access_token=')).split('=')[1];
+
+            try {{
+                const response = await fetch('https://sheets.bytepace.com/api/workspaces/1/docs', {{
+                    method: 'POST',
+                    headers: {{
+                        'Authorization': 'Bearer ' + token,
+                        'Content-Type': 'application/json'
+                    }},
+                    body: JSON.stringify({{ name: docName }})
+                }});
+
+                if (response.ok) {{
+                    const docId = await response.json();
+                    window.location.href = '/api/docs/' + docId;
+                }} else {{
+                    alert('Failed to create document');
+                }}
+            }} catch (error) {{
+                alert('Error: ' + error.message);
+            }}
+        }}
+    </script>
+</body>
+</html>""")
     </div>
 </body>
 </html>""")
