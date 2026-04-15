@@ -1,8 +1,11 @@
 import os
-from urllib.parse import urlencode
+import secrets
+import base64
+import hashlib
+from urllib.parse import urlencode, parse_qs, urlparse
 
 import httpx
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, HTTPException, Request, Cookie
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi import FastAPI
 
@@ -15,6 +18,32 @@ app = FastAPI(title="OnlyOffice Spreadsheet API", version="1.0.0")
 API_EXTERNAL_URL = os.getenv("API_EXTERNAL_URL", "")
 KEYCLOAK_ISSUER = os.getenv("KEYCLOAK_ISSUER_EXTERNAL", "")
 CLIENT_ID = "onlyoffice-client"
+CLIENT_SECRET = os.getenv("OO_CLIENT_SECRET", "")
+
+
+# ── Custom exception handler for 401 on editor endpoints ──────────────────────
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """Redirect to OAuth login if accessing editor without auth"""
+    if exc.status_code == 401 and "/docs/" in request.url.path and "/editor" in request.url.path:
+        # Extract doc_id from path
+        path_parts = request.url.path.split("/")
+        doc_id = ""
+        if "docs" in path_parts:
+            idx = path_parts.index("docs")
+            if idx + 1 < len(path_parts):
+                doc_id = path_parts[idx + 1]
+
+        return RedirectResponse(
+            url=f"/api/oauth/login?doc_id={doc_id}",
+            status_code=302
+        )
+
+    # Return normal error response
+    return HTMLResponse(
+        f"<h1>{exc.status_code}</h1><p>{exc.detail}</p>",
+        status_code=exc.status_code
+    )
 
 
 @app.get("/health")
@@ -22,7 +51,126 @@ async def health():
     return {"status": "ok"}
 
 
-# ── OAuth2 Login Page ────────────────────────────────────────────────────────
+# ── OAuth2 PKCE helpers ──────────────────────────────────────────────────────
+def generate_pkce_pair():
+    """Generate code_verifier and code_challenge for PKCE"""
+    code_verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode('utf-8').rstrip('=')
+    code_sha = hashlib.sha256(code_verifier.encode('utf-8')).digest()
+    code_challenge = base64.urlsafe_b64encode(code_sha).decode('utf-8').rstrip('=')
+    return code_verifier, code_challenge
+
+
+# ── OAuth2 Login (Authorization Code Flow with PKCE) ──────────────────────────
+@app.get("/oauth/login")
+async def oauth_login(doc_id: str = "", redirect_to: str = ""):
+    """Redirect to Keycloak for OAuth2 login"""
+    if not KEYCLOAK_ISSUER or not CLIENT_ID:
+        return HTMLResponse("<h1>Keycloak not configured</h1>", status_code=500)
+
+    code_verifier, code_challenge = generate_pkce_pair()
+
+    params = {
+        "client_id": CLIENT_ID,
+        "response_type": "code",
+        "scope": "openid profile email",
+        "redirect_uri": f"{API_EXTERNAL_URL}/oauth/callback",
+        "state": secrets.token_urlsafe(32),
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256",
+    }
+
+    # Store code_verifier in cookie (valid for 10 minutes)
+    auth_url = f"{KEYCLOAK_ISSUER}/protocol/openid-connect/auth?{urlencode(params)}"
+
+    response = RedirectResponse(url=auth_url)
+    response.set_cookie(
+        "pkce_verifier",
+        code_verifier,
+        max_age=600,
+        httponly=True,
+        secure=True,
+        samesite="lax"
+    )
+    response.set_cookie(
+        "oauth_state",
+        params["state"],
+        max_age=600,
+        httponly=True,
+        secure=True,
+        samesite="lax"
+    )
+    if doc_id:
+        response.set_cookie(
+            "oauth_doc_id",
+            doc_id,
+            max_age=600,
+            httponly=True,
+            secure=True,
+            samesite="lax"
+        )
+
+    return response
+
+
+# ── OAuth2 Callback ──────────────────────────────────────────────────────────
+@app.get("/oauth/callback")
+async def oauth_callback(
+    code: str = "",
+    state: str = "",
+    pkce_verifier: str = Cookie(None),
+    oauth_state: str = Cookie(None),
+    oauth_doc_id: str = Cookie(None),
+):
+    """Handle OAuth2 callback from Keycloak"""
+    if not code or not KEYCLOAK_ISSUER or not CLIENT_ID or not CLIENT_SECRET:
+        return HTMLResponse("<h1>Authentication failed: missing parameters</h1>", status_code=400)
+
+    if state != oauth_state:
+        return HTMLResponse("<h1>Authentication failed: state mismatch</h1>", status_code=400)
+
+    try:
+        # Exchange code for token
+        token_response = await httpx.AsyncClient().post(
+            f"{KEYCLOAK_ISSUER}/protocol/openid-connect/token",
+            data={
+                "grant_type": "authorization_code",
+                "client_id": CLIENT_ID,
+                "client_secret": CLIENT_SECRET,
+                "code": code,
+                "redirect_uri": f"{API_EXTERNAL_URL}/oauth/callback",
+                "code_verifier": pkce_verifier,
+            }
+        )
+
+        if token_response.status_code != 200:
+            return HTMLResponse(f"<h1>Token exchange failed: {token_response.text}</h1>", status_code=400)
+
+        token_data = token_response.json()
+        access_token = token_data.get("access_token")
+
+        if not access_token:
+            return HTMLResponse("<h1>No access token in response</h1>", status_code=400)
+
+        # Redirect to editor or dashboard
+        doc_id = oauth_doc_id or ""
+        redirect_url = f"/api/docs/{doc_id}/editor" if doc_id else "/api/"
+
+        response = RedirectResponse(url=redirect_url)
+        response.set_cookie(
+            "access_token",
+            access_token,
+            max_age=3600,
+            httponly=True,
+            secure=True,
+            samesite="lax"
+        )
+        return response
+
+    except Exception as e:
+        return HTMLResponse(f"<h1>Authentication error: {str(e)}</h1>", status_code=500)
+
+
+# ── OAuth2 Login Page (simple form fallback) ────────────────────────────────
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(doc_id: str = ""):
     """Simple HTML page to authenticate and open editor"""

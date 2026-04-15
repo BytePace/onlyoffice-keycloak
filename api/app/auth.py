@@ -1,7 +1,7 @@
 import os
 
 import httpx
-from fastapi import HTTPException, Security
+from fastapi import HTTPException, Security, Request, Cookie
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 
@@ -32,9 +32,22 @@ def invalidate_jwks_cache() -> None:
 
 
 async def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Security(bearer),
 ) -> dict:
-    token = credentials.credentials
+    """Get current user from Bearer token or cookie"""
+    token = None
+
+    # Try Bearer token first
+    if credentials:
+        token = credentials.credentials
+    # Fall back to cookie
+    elif "access_token" in request.cookies:
+        token = request.cookies["access_token"]
+
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
     try:
         jwks = await _fetch_jwks()
         payload = jwt.decode(
