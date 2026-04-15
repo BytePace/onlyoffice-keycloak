@@ -161,6 +161,15 @@ async def oauth_login(doc_id: str = "", redirect_to: str = ""):
             secure=True,
             samesite="lax"
         )
+    if redirect_to:
+        response.set_cookie(
+            "oauth_redirect_to",
+            redirect_to,
+            max_age=600,
+            httponly=True,
+            secure=True,
+            samesite="lax"
+        )
 
     return response
 
@@ -173,6 +182,7 @@ async def oauth_callback(
     pkce_verifier: str = Cookie(None),
     oauth_state: str = Cookie(None),
     oauth_doc_id: str = Cookie(None),
+    oauth_redirect_to: str = Cookie(None),
 ):
     """Handle OAuth2 callback from Keycloak"""
     if not code or not KEYCLOAK_ISSUER or not CLIENT_ID or not CLIENT_SECRET:
@@ -204,9 +214,13 @@ async def oauth_callback(
         if not access_token:
             return HTMLResponse("<h1>No access token in response</h1>", status_code=400)
 
-        # Redirect to editor or dashboard
-        doc_id = oauth_doc_id or ""
-        redirect_url = f"/api/docs/{doc_id}/editor" if doc_id else "/api/"
+        # Redirect to specified location or default to dashboard
+        if oauth_redirect_to:
+            redirect_url = oauth_redirect_to
+        elif oauth_doc_id:
+            redirect_url = f"/api/docs/{oauth_doc_id}/editor"
+        else:
+            redirect_url = "/api/"
 
         response = RedirectResponse(url=redirect_url)
         response.set_cookie(
@@ -393,6 +407,33 @@ async def get_records(
 
 # ── OnlyOffice browser editor ─────────────────────────────────────────────────
 
+@app.get("/docs/{doc_id}", response_class=HTMLResponse)
+async def open_document(doc_id: str, request: Request):
+    """Open document in browser - with auth redirect if needed"""
+    token = None
+
+    # Try Bearer token first
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+    # Fall back to cookie
+    elif "access_token" in request.cookies:
+        token = request.cookies["access_token"]
+
+    if not token:
+        # Not authenticated, redirect to OAuth login
+        return RedirectResponse(url=f"/api/oauth/login?redirect_to=/api/docs/{doc_id}", status_code=302)
+
+    # Token exists, try to validate it
+    try:
+        user = await get_current_user(request, None)
+        # Token is valid, show the editor
+        return RedirectResponse(url=f"/api/docs/{doc_id}/editor", status_code=302)
+    except HTTPException:
+        # Token is invalid, redirect to login
+        return RedirectResponse(url=f"/api/oauth/login?redirect_to=/api/docs/{doc_id}", status_code=302)
+
+
 @app.get("/docs/{doc_id}/editor", response_class=HTMLResponse)
 async def get_editor(doc_id: str, user: dict = Depends(get_current_user)):
     meta = storage.get_document_meta(doc_id)
@@ -404,8 +445,8 @@ async def get_editor(doc_id: str, user: dict = Depends(get_current_user)):
         doc_id=doc_id,
         title=meta["title"],
         user_email=user_email,
-        file_url=f"{API_EXTERNAL_URL}/api/docs/{doc_id}/file.xlsx",
-        callback_url=f"{API_EXTERNAL_URL}/api/docs/{doc_id}/callback",
+        file_url=f"{API_EXTERNAL_URL}/docs/{doc_id}/file.xlsx",
+        callback_url=f"{API_EXTERNAL_URL}/docs/{doc_id}/callback",
     )
     return HTMLResponse(content=onlyoffice.render_editor_html(config))
 
