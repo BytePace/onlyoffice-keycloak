@@ -209,7 +209,7 @@ async def oauth_login(doc_id: str = "", redirect_to: str = ""):
         max_age=600,
         httponly=True,
         secure=True,
-        samesite="lax"
+        samesite="none"
     )
     response.set_cookie(
         "oauth_state",
@@ -217,7 +217,7 @@ async def oauth_login(doc_id: str = "", redirect_to: str = ""):
         max_age=600,
         httponly=True,
         secure=True,
-        samesite="lax"
+        samesite="none"
     )
     if doc_id:
         response.set_cookie(
@@ -226,7 +226,7 @@ async def oauth_login(doc_id: str = "", redirect_to: str = ""):
             max_age=600,
             httponly=True,
             secure=True,
-            samesite="lax"
+            samesite="none"
         )
     if redirect_to:
         response.set_cookie(
@@ -235,7 +235,7 @@ async def oauth_login(doc_id: str = "", redirect_to: str = ""):
             max_age=600,
             httponly=True,
             secure=True,
-            samesite="lax"
+            samesite="none"
         )
 
     return response
