@@ -109,27 +109,13 @@ if [[ "$ROLLBACK" == true ]]; then
         fi
 
         if [[ -n "$KEYCLOAK_URL" && -n "$KEYCLOAK_ADMIN_PASSWORD" ]]; then
-            # Ensure KEYCLOAK_URL has https://
-            if [[ ! "$KEYCLOAK_URL" =~ ^https?:// ]]; then
-                KEYCLOAK_URL="https://${KEYCLOAK_URL}"
-            fi
-
-            # Get admin token
-            TOKEN=$(curl -s -X POST "${KEYCLOAK_URL}/realms/master/protocol/openid-connect/token" \
-                -H "Content-Type: application/x-www-form-urlencoded" \
-                -d "client_id=admin-cli&grant_type=password&username=admin&password=${KEYCLOAK_ADMIN_PASSWORD}" \
-                | jq -r '.access_token // empty' 2>/dev/null || true)
-
-            if [[ -n "$TOKEN" ]]; then
-                # Delete realm
-                if curl -sf -X DELETE "${KEYCLOAK_URL}/admin/realms/onlyoffice" \
-                    -H "Authorization: Bearer ${TOKEN}" 2>/dev/null; then
-                    success "Realm 'onlyoffice' deleted from Keycloak"
-                else
-                    warn "Could not delete realm (may not exist or auth failed)"
-                fi
+            # Use the delete-realm script
+            if KEYCLOAK_URL="$KEYCLOAK_URL" \
+               KEYCLOAK_ADMIN_PASSWORD="$KEYCLOAK_ADMIN_PASSWORD" \
+               bash "${SCRIPT_DIR}/scripts/delete-realm.sh"; then
+                success "Realm 'onlyoffice' deleted from Keycloak"
             else
-                warn "Could not get admin token for realm deletion"
+                warn "Could not delete realm (check Keycloak connectivity)"
             fi
         else
             warn "Could not read Keycloak config for realm deletion"

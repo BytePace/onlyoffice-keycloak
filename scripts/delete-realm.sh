@@ -19,29 +19,32 @@ fi
 
 # ── Get admin token ───────────────────────────────────────────────────────────
 log "Obtaining admin token from ${KEYCLOAK_URL}..."
-TOKEN_RESPONSE=$(curl -sfL -X POST "${KEYCLOAK_URL}/realms/master/protocol/openid-connect/token" \
-    -H "Content-Type: application/x-www-form-urlencoded" \
-    -d "client_id=admin-cli&grant_type=password&username=admin&password=${KEYCLOAK_ADMIN_PASSWORD}" 2>/tmp/keycloak-curl.err || true)
 
-if [[ -z "$TOKEN_RESPONSE" ]]; then
-    warn "Token response is empty. Error: $(cat /tmp/keycloak-curl.err 2>/dev/null || echo 'unknown')"
-    fail "Failed to obtain admin token"
+TOKEN_RESPONSE=$(curl -s -X POST "${KEYCLOAK_URL}/realms/master/protocol/openid-connect/token" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -d "client_id=admin-cli&grant_type=password&username=admin&password=${KEYCLOAK_ADMIN_PASSWORD}")
+
+TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access_token // empty' 2>/dev/null || echo "")
+
+if [[ -z "$TOKEN" ]]; then
+    error=$(echo "$TOKEN_RESPONSE" | jq -r '.error_description // .error // "unknown"' 2>/dev/null || echo "unknown")
+    fail "Failed to obtain admin token: $error"
 fi
 
-TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access_token // empty')
-[[ -z "$TOKEN" || "$TOKEN" == "null" ]] && fail "Failed to obtain admin token. Response: $TOKEN_RESPONSE"
 log "Admin token obtained."
 
 # ── Delete realm ──────────────────────────────────────────────────────────────
 log "Deleting realm '${REALM}' from Keycloak..."
 
-DELETE_RESPONSE=$(curl -sf -X DELETE "${KEYCLOAK_URL}/admin/realms/${REALM}" \
-    -H "Authorization: Bearer ${TOKEN}" 2>&1 || true)
+DELETE_RESPONSE=$(curl -s -w "\n%{http_code}" -X DELETE "${KEYCLOAK_URL}/admin/realms/${REALM}" \
+    -H "Authorization: Bearer ${TOKEN}")
 
-if [[ $? -eq 0 ]]; then
+HTTP_CODE=$(echo "$DELETE_RESPONSE" | tail -1)
+
+if [[ "$HTTP_CODE" == "204" ]] || [[ "$HTTP_CODE" == "200" ]]; then
     log "Realm '${REALM}' deleted successfully"
 else
-    warn "Could not delete realm (may not exist). Response: $DELETE_RESPONSE"
+    warn "Could not delete realm (HTTP $HTTP_CODE - may not exist)"
 fi
 
 log "Done."
