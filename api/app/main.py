@@ -9,8 +9,9 @@ from fastapi import Depends, HTTPException, Request, Cookie
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi import FastAPI
 
-from .auth import get_current_user
+from .auth import get_current_user, _fetch_jwks, KEYCLOAK_ISSUER_EXTERNAL
 from .models import AddRecordsRequest, CreateDocRequest, CreateTablesRequest
+from jose import jwt
 from . import onlyoffice, spreadsheet, storage
 
 app = FastAPI(title="OnlyOffice Spreadsheet API", version="1.0.0")
@@ -426,10 +427,17 @@ async def open_document(doc_id: str, request: Request):
 
     # Token exists, try to validate it
     try:
-        user = await get_current_user(request, None)
+        jwks = await _fetch_jwks()
+        payload = jwt.decode(
+            token,
+            jwks,
+            algorithms=["RS256"],
+            issuer=KEYCLOAK_ISSUER_EXTERNAL,
+            options={"verify_aud": False},
+        )
         # Token is valid, show the editor
         return RedirectResponse(url=f"/api/docs/{doc_id}/editor", status_code=302)
-    except HTTPException:
+    except Exception:
         # Token is invalid, redirect to login
         return RedirectResponse(url=f"/api/oauth/login?redirect_to=/api/docs/{doc_id}", status_code=302)
 
