@@ -1,17 +1,50 @@
 #!/usr/bin/env bash
 # test-integration.sh — Integration test script for OnlyOffice + Keycloak
 # Tests: Keycloak auth, document creation, editor access
+#
+# Usage (from your local machine):
+#   bash test-integration.sh \
+#     --keycloak-url https://auth.bytepace.com \
+#     --app-domain sheets.bytepace.com \
+#     --client-secret "2KO2YVLLZTSgvVUNxQbKpi2zawid996V" \
+#     --test-user ruslan.musagitov@gmail.com \
+#     --test-password qwertyu1
+#
+# Or with environment variables:
+#   export KEYCLOAK_URL=https://auth.bytepace.com
+#   export APP_DOMAIN=sheets.bytepace.com
+#   export CLIENT_SECRET="..."
+#   export TEST_PASSWORD="qwertyu1"
+#   bash test-integration.sh
 
 set -uo pipefail
 
-# ── Configuration ─────────────────────────────────────────────────────────────
+# ── Parse CLI arguments ───────────────────────────────────────────────────────
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --keycloak-url)     KEYCLOAK_URL="$2"; shift 2 ;;
+        --app-domain)       APP_DOMAIN="$2"; shift 2 ;;
+        --client-id)        CLIENT_ID="$2"; shift 2 ;;
+        --client-secret)    CLIENT_SECRET="$2"; shift 2 ;;
+        --test-user)        TEST_USER="$2"; shift 2 ;;
+        --test-password)    TEST_PASSWORD="$2"; shift 2 ;;
+        --realm)            REALM="$2"; shift 2 ;;
+        *)
+            echo "Unknown argument: $1"
+            echo "Usage: $0 --keycloak-url URL --app-domain DOMAIN --client-secret SECRET --test-password PASSWORD"
+            exit 1
+            ;;
+    esac
+done
+
+# ── Configuration (defaults can be overridden) ─────────────────────────────────
 KEYCLOAK_URL="${KEYCLOAK_URL:-https://auth.bytepace.com}"
 APP_DOMAIN="${APP_DOMAIN:-sheets.bytepace.com}"
 CLIENT_ID="${CLIENT_ID:-onlyoffice-client}"
 CLIENT_SECRET="${CLIENT_SECRET:-}"
 TEST_USER="${TEST_USER:-ruslan.musagitov@gmail.com}"
 TEST_PASSWORD="${TEST_PASSWORD:-}"
-REALM="onlyoffice"
+REALM="${REALM:-onlyoffice}"
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -27,11 +60,21 @@ warn()    { echo -e "${YELLOW}⚠${NC} $*"; }
 
 # ── Validate input ────────────────────────────────────────────────────────────
 if [[ -z "$CLIENT_SECRET" ]]; then
-    fail "CLIENT_SECRET is required. Usage: CLIENT_SECRET='...' TEST_PASSWORD='...' bash $0"
+    fail "CLIENT_SECRET is required.
+
+Get it from VPS:
+  ssh openclaw@49.13.194.13 'sudo cat /opt/onlyoffice-sso/deploy-credentials.txt'
+
+Usage:
+  bash $0 \\
+    --keycloak-url https://auth.bytepace.com \\
+    --app-domain sheets.bytepace.com \\
+    --client-secret 'YOUR_SECRET' \\
+    --test-password 'YOUR_PASSWORD'"
 fi
 
 if [[ -z "$TEST_PASSWORD" ]]; then
-    fail "TEST_PASSWORD is required. Usage: CLIENT_SECRET='...' TEST_PASSWORD='...' bash $0"
+    fail "TEST_PASSWORD is required. This is the Keycloak user password for $TEST_USER"
 fi
 
 echo ""
