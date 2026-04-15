@@ -81,7 +81,7 @@ async def root(request: Request):
         if docs:
             docs_html = "<h2>Your Documents</h2><ul style='text-align: left; display: inline-block;'>"
             for doc in docs:
-                docs_html += f'<li><a href="/api/docs/{doc["id"]}" style="color: #007bff; text-decoration: none;">{doc.get("title", doc["id"])}</a></li>'
+                docs_html += f'<li><a href="/api/docs/{doc["id"]}/editor" style="color: #007bff; text-decoration: none;">{doc.get("title", doc["id"])}</a></li>'
             docs_html += "</ul>"
         else:
             docs_html = "<p>No documents yet. <a href='#' onclick='createDoc()' style='color: #007bff;'>Create one now</a></p>"
