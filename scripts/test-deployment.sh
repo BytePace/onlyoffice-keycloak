@@ -7,6 +7,7 @@ APP_DOMAIN="${APP_DOMAIN:?}"
 KEYCLOAK_MODE="${KEYCLOAK_MODE:-existing}"
 KEYCLOAK_URL="${KEYCLOAK_URL:-}"
 AUTH_DOMAIN="${AUTH_DOMAIN:-}"
+KEYCLOAK_REALM="${KEYCLOAK_REALM:-ssa}"
 
 PASS=0; FAIL=0; WARN=0
 
@@ -83,9 +84,9 @@ check_url "OnlyOffice via domain (HTTPS)" "https://${APP_DOMAIN}/editor/healthch
 echo ""
 echo "▶ Keycloak"
 if [[ "$KEYCLOAK_MODE" == "new" && -n "$AUTH_DOMAIN" ]]; then
-    check_url "Keycloak OIDC discovery" "https://${AUTH_DOMAIN}/realms/onlyoffice/.well-known/openid-configuration"
+    check_url "Keycloak OIDC discovery" "https://${AUTH_DOMAIN}/realms/${KEYCLOAK_REALM}/.well-known/openid-configuration"
 elif [[ -n "$KEYCLOAK_URL" ]]; then
-    check_url "Keycloak OIDC discovery (existing)" "${KEYCLOAK_URL}/realms/onlyoffice/.well-known/openid-configuration"
+    check_url "Keycloak OIDC discovery (existing)" "${KEYCLOAK_URL}/realms/${KEYCLOAK_REALM}/.well-known/openid-configuration"
 fi
 
 # SSL Certificates

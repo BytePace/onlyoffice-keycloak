@@ -22,7 +22,7 @@ APP_DOMAIN="${APP_DOMAIN:-sheets.bytepace.com}"
 CLIENT_SECRET="${CLIENT_SECRET:-2KO2YVLLZTSgvVUNxQbKpi2zawid996V}"
 TEST_USER="${TEST_USER:-ruslan.musagitov@gmail.com}"
 TEST_PASSWORD="${TEST_PASSWORD:-}"
-REALM="onlyoffice"
+REALM="ssa"
 
 # ── Parse CLI arguments (override defaults) ───────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -62,6 +62,7 @@ fi
 bash "${SCRIPT_DIR}/scripts/test-integration.sh" \
     --keycloak-url "$KEYCLOAK_URL" \
     --app-domain "$APP_DOMAIN" \
+    --realm "$REALM" \
     --client-secret "$CLIENT_SECRET" \
     --test-user "$TEST_USER" \
     --test-password "$TEST_PASSWORD"

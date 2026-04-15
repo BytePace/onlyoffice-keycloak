@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# keycloak-realm-setup.sh — Creates realm "onlyoffice" with two OIDC clients
-# in an existing or newly-deployed Keycloak instance.
+# keycloak-realm-setup.sh — Ensures realm "ssa" (KEYCLOAK_REALM) with two OnlyOffice OIDC clients
+# in an existing or newly-deployed Keycloak instance (shared with Grist, etc.).
 #
 # Required env vars (or args):
 #   KEYCLOAK_URL            — e.g. http://127.0.0.1:8090 (internal) or https://auth.example.com
@@ -21,7 +21,8 @@ EMAIL_USER="${EMAIL_USER:-}"
 EMAIL_PASSWORD="${EMAIL_PASSWORD:-}"
 EMAIL_HOST="${EMAIL_HOST:-smtp.gmail.com}"
 EMAIL_PORT="${EMAIL_PORT:-587}"
-REALM="onlyoffice"
+KEYCLOAK_REALM="${KEYCLOAK_REALM:-ssa}"
+REALM="$KEYCLOAK_REALM"
 MAX_WAIT=120
 
 log()  { echo "[keycloak-setup] $*" | tee -a /tmp/keycloak-setup.log; }
@@ -99,7 +100,6 @@ update_realm_smtp() {
             password: $pw,
             from: $u
         }
-        | .verifyEmail = false
         | .resetPasswordAllowed = true') || {
         warn "Failed to assemble SMTP JSON (jq). Configure SMTP manually in Keycloak admin console."
         return 0
@@ -131,7 +131,7 @@ else
   "enabled": true,
   "registrationAllowed": true,
   "resetPasswordAllowed": true,
-  "verifyEmail": false,
+  "verifyEmail": true,
   "ssoSessionIdleTimeout": 3600,
   "ssoSessionMaxLifespan": 36000,
   "offlineSessionIdleTimeout": 604800

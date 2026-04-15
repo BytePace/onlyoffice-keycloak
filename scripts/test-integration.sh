@@ -44,7 +44,7 @@ CLIENT_ID="${CLIENT_ID:-onlyoffice-client}"
 CLIENT_SECRET="${CLIENT_SECRET:-}"
 TEST_USER="${TEST_USER:-ruslan.musagitov@gmail.com}"
 TEST_PASSWORD="${TEST_PASSWORD:-}"
-REALM="${REALM:-onlyoffice}"
+REALM="${REALM:-ssa}"
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 RED='\033[0;31m'

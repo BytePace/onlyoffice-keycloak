@@ -2,7 +2,7 @@
 # deploy.sh — One-command deployment of OnlyOffice + Keycloak SSO stack.
 #
 # Keycloak modes:
-#   existing  — reuse an existing Keycloak; only adds realm "onlyoffice" + clients
+#   existing  — reuse an existing Keycloak; ensures realm "ssa" + OnlyOffice OIDC clients
 #   new       — deploy a fresh Keycloak + PostgreSQL alongside the other services
 #
 # Usage (interactive):
@@ -34,6 +34,7 @@
 #
 # Rollback:
 #   sudo bash deploy.sh --rollback [--delete-all] [--delete-realm]
+#   (--delete-realm removes only OnlyOffice clients from realm ssa, not the whole realm)
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -67,6 +68,7 @@ DELETE_ALL=false
 DELETE_REALM=false
 KEEP_DATA=false
 OO_CLIENT_SECRET=""
+KEYCLOAK_REALM="ssa"
 
 # ── Argument parser ───────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -99,27 +101,35 @@ if [[ "$ROLLBACK" == true ]]; then
     cd "${DEPLOY_DIR}" 2>/dev/null && docker-compose down || true
 
     if [[ "$DELETE_REALM" == true ]]; then
-        log "Attempting to delete 'onlyoffice' realm from Keycloak ..."
+        log "Attempting to remove OnlyOffice OIDC clients from Keycloak realm '${KEYCLOAK_REALM:-ssa}' ..."
 
         # Read config from .env if not provided via CLI
         if [[ -z "$KEYCLOAK_URL" && -f "${ENV_FILE}" ]]; then
-            KEYCLOAK_URL=$(grep "^KEYCLOAK_URL=" "${ENV_FILE}" | cut -d= -f2- | tr -d '"')
+            KEYCLOAK_URL=$(grep "^KEYCLOAK_URL=" "${ENV_FILE}" 2>/dev/null | cut -d= -f2- | tr -d '"' || true)
+            if [[ -z "$KEYCLOAK_URL" ]]; then
+                KEYCLOAK_URL=$(grep "^KEYCLOAK_EXTERNAL_URL=" "${ENV_FILE}" 2>/dev/null | cut -d= -f2- | tr -d '"' || true)
+            fi
         fi
         if [[ -z "$KEYCLOAK_ADMIN_PASSWORD" && -f "${ENV_FILE}" ]]; then
             KEYCLOAK_ADMIN_PASSWORD=$(grep "^KEYCLOAK_ADMIN_PASSWORD=" "${ENV_FILE}" | cut -d= -f2- | tr -d '"')
         fi
+        if [[ -z "$KEYCLOAK_REALM" && -f "${ENV_FILE}" ]]; then
+            KEYCLOAK_REALM=$(grep "^KEYCLOAK_REALM=" "${ENV_FILE}" 2>/dev/null | cut -d= -f2- | tr -d '"' || true)
+        fi
+        KEYCLOAK_REALM="${KEYCLOAK_REALM:-ssa}"
 
         if [[ -n "$KEYCLOAK_URL" && -n "$KEYCLOAK_ADMIN_PASSWORD" ]]; then
-            # Use the delete-realm script
+            # Removes only onlyoffice-client / onlyoffice-mobile (shared realm preserved)
             if KEYCLOAK_URL="$KEYCLOAK_URL" \
                KEYCLOAK_ADMIN_PASSWORD="$KEYCLOAK_ADMIN_PASSWORD" \
+               KEYCLOAK_REALM="$KEYCLOAK_REALM" \
                bash "${SCRIPT_DIR}/scripts/delete-realm.sh"; then
-                success "Realm 'onlyoffice' deleted from Keycloak"
+                success "OnlyOffice OIDC clients removed from realm '${KEYCLOAK_REALM}'"
             else
-                warn "Could not delete realm (check Keycloak connectivity)"
+                warn "Could not remove OnlyOffice clients (check Keycloak connectivity)"
             fi
         else
-            warn "Could not read Keycloak config for realm deletion"
+            warn "Could not read Keycloak config for client deletion"
         fi
     fi
 
@@ -152,7 +162,7 @@ if [[ -t 0 ]]; then
     if [[ -z "$KEYCLOAK_MODE" ]]; then
         echo ""
         echo "Keycloak setup:"
-        echo "  [1] Use EXISTING Keycloak instance (adds realm 'onlyoffice' to it)"
+        echo "  [1] Use EXISTING Keycloak instance (realm 'ssa' + OnlyOffice clients)"
         echo "  [2] Deploy NEW Keycloak alongside OnlyOffice"
         read -rp "Choose [1/2]: " kc_choice
         case "$kc_choice" in
@@ -201,7 +211,7 @@ else
     KEYCLOAK_SETUP_URL="http://127.0.0.1:8090"
 fi
 
-OIDC_ISSUER_EXTERNAL="${KEYCLOAK_EXTERNAL_URL}/realms/onlyoffice"
+# OIDC issuer set after secrets load (KEYCLOAK_REALM may come from .env)
 
 # ── Load or generate secrets ──────────────────────────────────────────────────
 if [[ -f "$ENV_FILE" && "$KEEP_DATA" == true ]]; then
@@ -217,6 +227,9 @@ else
     fi
 fi
 
+KEYCLOAK_REALM="${KEYCLOAK_REALM:-ssa}"
+OIDC_ISSUER_EXTERNAL="${KEYCLOAK_EXTERNAL_URL}/realms/${KEYCLOAK_REALM}"
+
 # ── Copy API source to deploy dir ─────────────────────────────────────────────
 log "Copying spreadsheet-api source to ${DEPLOY_DIR}/api/ ..."
 cp -r "${SCRIPT_DIR}/api" "${DEPLOY_DIR}/"
@@ -225,6 +238,7 @@ cp -r "${SCRIPT_DIR}/api" "${DEPLOY_DIR}/"
 log "Writing ${ENV_FILE} ..."
 cat > "$ENV_FILE" <<EOF
 KEYCLOAK_MODE=${KEYCLOAK_MODE}
+KEYCLOAK_REALM=${KEYCLOAK_REALM}
 KEYCLOAK_EXTERNAL_URL=${KEYCLOAK_EXTERNAL_URL}
 OIDC_ISSUER_EXTERNAL=${OIDC_ISSUER_EXTERNAL}
 APP_DOMAIN=${APP_DOMAIN}
@@ -252,7 +266,7 @@ COMPOSE_COMMON=$(cat <<YAML
     container_name: oo-sso-api
     restart: unless-stopped
     environment:
-      KEYCLOAK_ISSUER: ${KEYCLOAK_INTERNAL_URL}/realms/onlyoffice
+      KEYCLOAK_ISSUER: ${KEYCLOAK_INTERNAL_URL}/realms/${KEYCLOAK_REALM}
       KEYCLOAK_ISSUER_EXTERNAL: ${OIDC_ISSUER_EXTERNAL}
       OO_CLIENT_SECRET: ${OO_CLIENT_SECRET}
       ONLYOFFICE_JWT_SECRET: ${ONLYOFFICE_JWT_SECRET}
@@ -398,10 +412,11 @@ timeout 60 bash -c 'until curl -sf http://127.0.0.1:8091/healthcheck >/dev/null 
   || warn "OnlyOffice healthcheck timeout (may still be initializing)."
 
 # ── Configure Keycloak realm ──────────────────────────────────────────────────
-log "Configuring Keycloak realm 'onlyoffice' ..."
+log "Configuring Keycloak realm '${KEYCLOAK_REALM}' (OnlyOffice OIDC clients) ..."
 SETUP_KC_URL="${KEYCLOAK_SETUP_URL:-$KEYCLOAK_URL}"
 if ! KEYCLOAK_URL="$SETUP_KC_URL" \
 KEYCLOAK_ADMIN_PASSWORD="$KEYCLOAK_ADMIN_PASSWORD" \
+KEYCLOAK_REALM="$KEYCLOAK_REALM" \
 APP_DOMAIN="$APP_DOMAIN" \
 MOBILE_REDIRECT_URI="$MOBILE_REDIRECT_URI" \
 EMAIL_USER="$EMAIL_USER" \
@@ -451,6 +466,7 @@ fi
 log "Running deployment tests ..."
 APP_DOMAIN="$APP_DOMAIN" \
 KEYCLOAK_MODE="$KEYCLOAK_MODE" \
+KEYCLOAK_REALM="$KEYCLOAK_REALM" \
 KEYCLOAK_URL="${KEYCLOAK_SETUP_URL:-${KEYCLOAK_URL:-}}" \
 AUTH_DOMAIN="${AUTH_DOMAIN:-}" \
     bash "${SCRIPT_DIR}/scripts/test-deployment.sh" || warn "Some tests failed — check above output."

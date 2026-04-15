@@ -2,7 +2,7 @@ import os
 import secrets
 import base64
 import hashlib
-from urllib.parse import urlencode, parse_qs, urlparse
+from urllib.parse import quote, urlencode, parse_qs, urlparse
 
 import httpx
 from fastapi import Depends, HTTPException, Request, Cookie
@@ -88,6 +88,15 @@ async def root(request: Request):
 
         user_name = user.get("name") or user.get("preferred_username", "User")
 
+        if KEYCLOAK_ISSUER_EXTERNAL and API_EXTERNAL_URL:
+            _redir = API_EXTERNAL_URL.rstrip("/") + "/"
+            logout_href = (
+                f"{KEYCLOAK_ISSUER_EXTERNAL.rstrip('/')}/protocol/openid-connect/logout"
+                f"?redirect_uri={quote(_redir, safe='')}"
+            )
+        else:
+            logout_href = "#"
+
         # Token is valid, show dashboard
         dashboard_html = """<!DOCTYPE html>
 <html>
@@ -130,10 +139,11 @@ async def root(request: Request):
             <li><code>POST /workspaces/1/docs</code> - Create a new document</li>
             <li><code>GET /docs/{'{doc_id}'}</code> - Open a document in browser</li>
         </ul>
-
-        <div class="logout" style="margin-top: 40px; text-align: right;">
-            <a href="https://auth.bytepace.com/realms/onlyoffice/protocol/openid-connect/logout?redirect_uri=https://sheets.bytepace.com/api/" onclick="alert('You have been logged out')">Logout</a>
-        </div>
+""" + (
+            '        <div class="logout" style="margin-top: 40px; text-align: right;">\n'
+            f'            <a href="{logout_href}" onclick="alert(\'You have been logged out\')">Logout</a>\n'
+            '        </div>\n'
+        ) + """
     </div>
 
     <script>
