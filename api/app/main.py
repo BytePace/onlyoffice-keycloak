@@ -1,8 +1,9 @@
 import os
+from urllib.parse import urlencode
 
 import httpx
-from fastapi import Depends, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import Depends, HTTPException, Request
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi import FastAPI
 
 from .auth import get_current_user
@@ -12,11 +13,103 @@ from . import onlyoffice, spreadsheet, storage
 app = FastAPI(title="OnlyOffice Spreadsheet API", version="1.0.0")
 
 API_EXTERNAL_URL = os.getenv("API_EXTERNAL_URL", "")
+KEYCLOAK_ISSUER = os.getenv("KEYCLOAK_ISSUER_EXTERNAL", "")
+CLIENT_ID = "onlyoffice-client"
 
 
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+# ── OAuth2 Login Page ────────────────────────────────────────────────────────
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(doc_id: str = ""):
+    """Simple HTML page to authenticate and open editor"""
+    if not KEYCLOAK_ISSUER:
+        return "<h1>Keycloak not configured</h1>"
+
+    return f"""<!DOCTYPE html>
+    <html>
+    <head>
+        <title>OnlyOffice Login</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #f5f5f5; }}
+            .container {{ background: white; padding: 40px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); max-width: 400px; }}
+            h1 {{ color: #333; text-align: center; }}
+            .form-group {{ margin: 20px 0; }}
+            label {{ display: block; margin-bottom: 5px; font-weight: bold; }}
+            input {{ width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; }}
+            button {{ width: 100%; padding: 10px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; margin-top: 10px; }}
+            button:hover {{ background: #0056b3; }}
+            .error {{ color: #dc3545; margin: 10px 0; }}
+            .loading {{ display: none; text-align: center; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>OnlyOffice</h1>
+            <form id="loginForm" onsubmit="handleLogin(event)">
+                <div class="form-group">
+                    <label for="email">Email:</label>
+                    <input type="email" id="email" name="email" value="ruslan.musagitov@gmail.com" required>
+                </div>
+                <div class="form-group">
+                    <label for="password">Password:</label>
+                    <input type="password" id="password" name="password" required autofocus>
+                </div>
+                <button type="submit">Login</button>
+            </form>
+            <div class="loading" id="loading">Authenticating...</div>
+            <div class="error" id="error"></div>
+        </div>
+
+        <script>
+            async function handleLogin(event) {{
+                event.preventDefault();
+
+                document.getElementById('loading').style.display = 'block';
+                document.getElementById('error').innerText = '';
+
+                const email = document.getElementById('email').value;
+                const password = document.getElementById('password').value;
+
+                try {{
+                    const response = await fetch('{KEYCLOAK_ISSUER}/protocol/openid-connect/token', {{
+                        method: 'POST',
+                        headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
+                        body: new URLSearchParams({{
+                            grant_type: 'password',
+                            client_id: 'onlyoffice-client',
+                            username: email,
+                            password: password
+                        }})
+                    }});
+
+                    if (!response.ok) {{
+                        const error = await response.json();
+                        throw new Error(error.error_description || 'Authentication failed');
+                    }}
+
+                    const data = await response.json();
+                    const token = data.access_token;
+
+                    // Save token to sessionStorage
+                    sessionStorage.setItem('access_token', token);
+
+                    // Redirect to editor or ask for doc_id
+                    const docId = '{doc_id}' || prompt('Enter Document ID:');
+                    if (docId) {{
+                        window.location.href = '/api/docs/' + docId + '/editor?token=' + token;
+                    }}
+                }} catch (error) {{
+                    document.getElementById('error').innerText = 'Login failed: ' + error.message;
+                    document.getElementById('loading').style.display = 'none';
+                }}
+            }}
+        </script>
+    </body>
+    </html>"""
 
 
 # ── Document list (Grist-compatible) ──────────────────────────────────────────
