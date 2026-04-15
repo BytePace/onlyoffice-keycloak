@@ -174,8 +174,11 @@ if [[ -t 0 ]]; then
     [[ -z "$APP_DOMAIN" ]]    && read -rp "Application domain (e.g. app.example.com, API at /api, editor at /editor): " APP_DOMAIN
     [[ -z "$CERTBOT_EMAIL" ]] && read -rp "Email for Let's Encrypt certificates: " CERTBOT_EMAIL
 
-    read -rp "Configure nginx reverse proxy? [y/N]: " nginx_yn
-    [[ "$nginx_yn" =~ ^[Yy]$ ]] && SETUP_NGINX=true
+    # Only ask about nginx if --setup-nginx was not provided
+    if [[ "$SETUP_NGINX" != true ]]; then
+        read -rp "Configure nginx reverse proxy? [y/N]: " nginx_yn
+        [[ "$nginx_yn" =~ ^[Yy]$ ]] && SETUP_NGINX=true
+    fi
 fi
 
 # ── Validate inputs ───────────────────────────────────────────────────────────
