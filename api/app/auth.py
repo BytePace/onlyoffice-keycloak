@@ -46,6 +46,10 @@ async def get_current_user(
     elif "access_token" in request.cookies:
         token = request.cookies["access_token"]
 
+    # Debug: log what we found
+    import sys
+    print(f"[AUTH] Bearer: {'YES' if (credentials and credentials.credentials) else 'NO'}, Cookie: {'YES' if 'access_token' in request.cookies else 'NO'}, Cookies: {dict(request.cookies)}", file=sys.stderr)
+
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
