@@ -73,7 +73,7 @@ async def root(request: Request):
 
     # Try to validate token
     try:
-        user = await get_current_user(request, None)
+        user = await get_current_user(request)
         # Token is valid, show list of documents
         docs = storage.list_documents()
 
