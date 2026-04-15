@@ -261,7 +261,7 @@ else
           "temporary": false
         }' || warn "Could not set password for test user"
 
-        log "Test user created: email=${TEST_USER_EMAIL}, password=${TEST_USER_PASSWORD}"
+        log "Test user created: email=${TEST_USER_EMAIL}, password=${TEST_USER_PASSWORD} (permanent, not temporary)"
     fi
 fi
 
