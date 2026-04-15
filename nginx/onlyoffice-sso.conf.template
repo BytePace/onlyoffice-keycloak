@@ -52,7 +52,7 @@ server {
 
     # ── Root redirect ──────────────────────────────────────────────────────
     location / {
-        return 301 https://$host/editor/;
+        return 301 https://$host/api/;
     }
 }
 

@@ -66,6 +66,7 @@ ROLLBACK=false
 DELETE_ALL=false
 DELETE_REALM=false
 KEEP_DATA=false
+OO_CLIENT_SECRET=""
 
 # ── Argument parser ───────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -229,6 +230,7 @@ OIDC_ISSUER_EXTERNAL=${OIDC_ISSUER_EXTERNAL}
 APP_DOMAIN=${APP_DOMAIN}
 ONLYOFFICE_JWT_SECRET=${ONLYOFFICE_JWT_SECRET}
 MOBILE_REDIRECT_URI=${MOBILE_REDIRECT_URI}
+OO_CLIENT_SECRET=${OO_CLIENT_SECRET}
 EOF
 
 if [[ "$KEYCLOAK_MODE" == "new" ]]; then
@@ -252,6 +254,7 @@ COMPOSE_COMMON=$(cat <<YAML
     environment:
       KEYCLOAK_ISSUER: ${KEYCLOAK_INTERNAL_URL}/realms/onlyoffice
       KEYCLOAK_ISSUER_EXTERNAL: ${OIDC_ISSUER_EXTERNAL}
+      OO_CLIENT_SECRET: ${OO_CLIENT_SECRET}
       ONLYOFFICE_JWT_SECRET: ${ONLYOFFICE_JWT_SECRET}
       ONLYOFFICE_DOCS_EXTERNAL_URL: https://${APP_DOMAIN}/editor
       API_EXTERNAL_URL: https://${APP_DOMAIN}/api
@@ -413,9 +416,19 @@ fi
 # Retrieve and persist the client secret (if available)
 if [[ -f /tmp/oo-client-secret.txt ]]; then
     OO_CLIENT_SECRET="$(cat /tmp/oo-client-secret.txt)"
-    echo "OO_CLIENT_SECRET=${OO_CLIENT_SECRET}" >> "$ENV_FILE"
+    # Update .env file with the client secret (replace or add the line)
+    if grep -q "^OO_CLIENT_SECRET=" "$ENV_FILE"; then
+        sed -i "s|^OO_CLIENT_SECRET=.*|OO_CLIENT_SECRET=${OO_CLIENT_SECRET}|" "$ENV_FILE"
+    else
+        echo "OO_CLIENT_SECRET=${OO_CLIENT_SECRET}" >> "$ENV_FILE"
+    fi
     rm -f /tmp/oo-client-secret.txt
     success "Keycloak realm configured."
+
+    # Restart the API container to apply the new secret
+    log "Restarting spreadsheet-api container with new client secret..."
+    cd "${DEPLOY_DIR}"
+    docker-compose up -d --no-build spreadsheet-api || warn "Failed to restart API container"
 else
     warn "Client secret not found. Keycloak realm setup may have failed."
 fi

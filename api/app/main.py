@@ -52,6 +52,58 @@ async def health():
     return {"status": "ok"}
 
 
+# ── Root endpoint (requires auth, redirects to login) ─────────────────────────
+@app.get("/", response_class=HTMLResponse)
+async def root(request: Request):
+    """Root endpoint: check auth and redirect to oauth login if needed"""
+    token = None
+
+    # Try Bearer token first
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+    # Fall back to cookie
+    elif "access_token" in request.cookies:
+        token = request.cookies["access_token"]
+
+    if not token:
+        # Not authenticated, redirect to OAuth login
+        return RedirectResponse(url="/api/oauth/login", status_code=302)
+
+    # Try to validate token
+    try:
+        await get_current_user(request, None)
+        # Token is valid, show dashboard or redirect to editor
+        return HTMLResponse("""<!DOCTYPE html>
+<html>
+<head>
+    <title>OnlyOffice Spreadsheet</title>
+    <style>
+        body { font-family: Arial, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #f5f5f5; }
+        .container { background: white; padding: 40px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); max-width: 600px; text-align: center; }
+        h1 { color: #333; }
+        p { color: #666; margin: 20px 0; }
+        .button { display: inline-block; padding: 12px 24px; background: #007bff; color: white; text-decoration: none; border-radius: 4px; margin: 10px; }
+        .button:hover { background: #0056b3; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>OnlyOffice Spreadsheet API</h1>
+        <p>You are authenticated. Please use the REST API or open the OnlyOffice editor.</p>
+        <p>To create a new document:</p>
+        <pre>curl -X POST https://sheets.bytepace.com/api/workspaces/1/docs \\
+  -H "Authorization: Bearer YOUR_TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '{"name": "My Document"}'</pre>
+    </div>
+</body>
+</html>""")
+    except HTTPException:
+        # Token is invalid, redirect to login
+        return RedirectResponse(url="/api/oauth/login", status_code=302)
+
+
 # ── OAuth2 PKCE helpers ──────────────────────────────────────────────────────
 def generate_pkce_pair():
     """Generate code_verifier and code_challenge for PKCE"""

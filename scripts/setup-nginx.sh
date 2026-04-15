@@ -3,7 +3,7 @@
 # Expected env vars: APP_DOMAIN, AUTH_DOMAIN (optional),
 #                    KEYCLOAK_MODE (new|existing), NGINX_CONF_TEMPLATE
 
-set -uo pipefail
+set -euo pipefail
 
 APP_DOMAIN="${APP_DOMAIN:?}"
 KEYCLOAK_MODE="${KEYCLOAK_MODE:-existing}"
@@ -134,7 +134,7 @@ server {
 
     # ── Root redirect ──────────────────────────────────────────────────────
     location / {
-        return 301 http://\$host/editor;
+        return 301 http://\$host/api;
     }
 }
 
