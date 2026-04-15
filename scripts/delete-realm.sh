@@ -7,9 +7,10 @@ KEYCLOAK_URL="${KEYCLOAK_URL:?Error: KEYCLOAK_URL required}"
 KEYCLOAK_ADMIN_PASSWORD="${KEYCLOAK_ADMIN_PASSWORD:?Error: KEYCLOAK_ADMIN_PASSWORD required}"
 REALM="onlyoffice"
 
-log()  { echo "[delete-realm] $*"; }
-warn() { echo "[delete-realm] WARN: $*" >&2; }
-fail() { echo "[delete-realm] ERROR: $*" >&2; exit 1; }
+log()     { echo "[delete-realm] $*"; }
+success() { echo "[delete-realm] ✓ $*"; }
+warn()    { echo "[delete-realm] WARN: $*" >&2; }
+fail()    { echo "[delete-realm] ERROR: $*" >&2; exit 1; }
 
 # ── Ensure KEYCLOAK_URL has https:// ──────────────────────────────────────────
 if [[ ! "$KEYCLOAK_URL" =~ ^https?:// ]]; then
@@ -42,9 +43,23 @@ DELETE_RESPONSE=$(curl -s -w "\n%{http_code}" -X DELETE "${KEYCLOAK_URL}/admin/r
 HTTP_CODE=$(echo "$DELETE_RESPONSE" | tail -1)
 
 if [[ "$HTTP_CODE" == "204" ]] || [[ "$HTTP_CODE" == "200" ]]; then
-    log "Realm '${REALM}' deleted successfully"
+    log "Realm '${REALM}' delete request successful (HTTP $HTTP_CODE)"
 else
-    warn "Could not delete realm (HTTP $HTTP_CODE - may not exist)"
+    warn "Delete request returned HTTP $HTTP_CODE"
 fi
 
-log "Done."
+# ── Verify realm is deleted ────────────────────────────────────────────────────
+log "Verifying realm deletion..."
+sleep 1  # Give Keycloak time to process
+
+VERIFY_RESPONSE=$(curl -s -w "\n%{http_code}" "${KEYCLOAK_URL}/admin/realms/${REALM}" \
+    -H "Authorization: Bearer ${TOKEN}")
+
+VERIFY_CODE=$(echo "$VERIFY_RESPONSE" | tail -1)
+
+if [[ "$VERIFY_CODE" == "404" ]]; then
+    success "✓ Realm '${REALM}' has been successfully deleted (verified)"
+    exit 0
+else
+    fail "✗ Realm '${REALM}' still exists (HTTP $VERIFY_CODE). Deletion failed."
+fi
