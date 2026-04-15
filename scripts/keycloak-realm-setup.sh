@@ -226,6 +226,46 @@ else
     log "Audience mapper added."
 fi
 
+# ── Create test user (for development/testing) ────────────────────────────────
+TEST_USER_EMAIL="ruslan.musagitov@gmail.com"
+TEST_USER_PASSWORD="qwertyu1"
+
+log "Creating test user '${TEST_USER_EMAIL}' ..."
+
+# Check if user exists
+EXISTING_USER=$(kc_get "${KEYCLOAK_URL}/admin/realms/${REALM}/users?username=${TEST_USER_EMAIL}" \
+    | jq -r '.[0].id // empty')
+
+if [[ -n "$EXISTING_USER" ]]; then
+    log "Test user '${TEST_USER_EMAIL}' already exists — skipping creation."
+else
+    log "Creating test user '${TEST_USER_EMAIL}' ..."
+    kc_post "${KEYCLOAK_URL}/admin/realms/${REALM}/users" -d '{
+      "username": "'"${TEST_USER_EMAIL}"'",
+      "email": "'"${TEST_USER_EMAIL}"'",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "ruslan",
+      "lastName": "musagitov"
+    }' || warn "Could not create test user"
+
+    # Get user ID
+    USER_ID=$(kc_get "${KEYCLOAK_URL}/admin/realms/${REALM}/users?username=${TEST_USER_EMAIL}" \
+        | jq -r '.[0].id // empty')
+
+    if [[ -n "$USER_ID" ]]; then
+        # Set password
+        kc_post "${KEYCLOAK_URL}/admin/realms/${REALM}/users/${USER_ID}/reset-password" -d '{
+          "type": "password",
+          "value": "'"${TEST_USER_PASSWORD}"'",
+          "temporary": false
+        }' || warn "Could not set password for test user"
+
+        log "Test user created: email=${TEST_USER_EMAIL}, password=${TEST_USER_PASSWORD}"
+    fi
+fi
+
 log "Keycloak realm '${REALM}' setup complete."
 log "  Web client:    onlyoffice-client (secret in /tmp/oo-client-secret.txt)"
 log "  Mobile client: onlyoffice-mobile (PKCE, redirect: ${MOBILE_REDIRECT_URI})"
+log "  Test user:     ${TEST_USER_EMAIL} / ${TEST_USER_PASSWORD}"
