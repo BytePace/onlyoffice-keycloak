@@ -89,33 +89,33 @@ async def root(request: Request):
         user_name = user.get("name") or user.get("preferred_username", "User")
 
         # Token is valid, show dashboard
-        return HTMLResponse("""<!DOCTYPE html>
+        dashboard_html = f"""<!DOCTYPE html>
 <html>
 <head>
     <title>OnlyOffice Spreadsheet</title>
     <style>
-        body { font-family: Arial, sans-serif; margin: 0; background: #f5f5f5; }
-        .header { background: #007bff; color: white; padding: 20px; text-align: center; }
-        .container { max-width: 800px; margin: 40px auto; background: white; padding: 40px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        h1 { color: #333; margin-top: 0; }
-        h2 { color: #333; margin-top: 30px; }
-        p { color: #666; }
-        .button { display: inline-block; padding: 12px 24px; background: #007bff; color: white; text-decoration: none; border-radius: 4px; margin: 10px 0; border: none; cursor: pointer; font-size: 16px; }
-        .button:hover { background: #0056b3; }
-        ul { list-style: none; padding: 0; }
-        li { padding: 10px; margin: 5px 0; background: #f9f9f9; border-radius: 4px; }
-        a { color: #007bff; text-decoration: none; }
-        a:hover { text-decoration: underline; }
-        .logout { float: right; font-size: 14px; }
+        body {{ font-family: Arial, sans-serif; margin: 0; background: #f5f5f5; }}
+        .header {{ background: #007bff; color: white; padding: 20px; text-align: center; }}
+        .container {{ max-width: 800px; margin: 40px auto; background: white; padding: 40px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+        h1 {{ color: #333; margin-top: 0; }}
+        h2 {{ color: #333; margin-top: 30px; }}
+        p {{ color: #666; }}
+        .button {{ display: inline-block; padding: 12px 24px; background: #007bff; color: white; text-decoration: none; border-radius: 4px; margin: 10px 0; border: none; cursor: pointer; font-size: 16px; }}
+        .button:hover {{ background: #0056b3; }}
+        ul {{ list-style: none; padding: 0; }}
+        li {{ padding: 10px; margin: 5px 0; background: #f9f9f9; border-radius: 4px; }}
+        a {{ color: #007bff; text-decoration: none; }}
+        a:hover {{ text-decoration: underline; }}
+        .logout {{ float: right; font-size: 14px; }}
     </style>
 </head>
 <body>
     <div class="header">
         <h1 style="margin: 0;">OnlyOffice Spreadsheet</h1>
-        <p style="margin: 10px 0 0 0;">Welcome, {0}!</p>
+        <p style="margin: 10px 0 0 0;">Welcome, {user_name}!</p>
     </div>
     <div class="container">
-        {1}
+        {docs_html}
 
         <h2>Create New Document</h2>
         <form onsubmit="createDocument(event)">
@@ -164,7 +164,8 @@ async def root(request: Request):
         }
     </script>
 </body>
-</html>""".format(user_name, docs_html))
+</html>"""
+        return HTMLResponse(dashboard_html)
     except HTTPException:
         # Token is invalid, redirect to login
         return RedirectResponse(url="/api/oauth/login", status_code=302)
