@@ -16,14 +16,20 @@
 #     --keycloak-admin-password "secret" \
 #     --app-domain app.example.com \
 #     --certbot-email admin@example.com \
+#     --email-user "noreply@example.com" \
+#     --email-password "app-password" \
 #     --setup-nginx
 #
-#   # New Keycloak:
+#   # New Keycloak (with SMTP):
 #   sudo bash deploy.sh \
 #     --keycloak-mode new \
 #     --auth-domain auth.example.com \
 #     --app-domain app.example.com \
 #     --certbot-email admin@example.com \
+#     --email-user "noreply@example.com" \
+#     --email-password "app-password" \
+#     --email-host "smtp.gmail.com" \
+#     --email-port "587" \
 #     --setup-nginx
 #
 # Rollback:
@@ -50,6 +56,10 @@ KEYCLOAK_ADMIN_PASSWORD=""
 AUTH_DOMAIN=""           # used when mode=new
 APP_DOMAIN=""            # single domain for API and editor
 CERTBOT_EMAIL=""
+EMAIL_USER=""            # SMTP for Keycloak email (password reset, etc)
+EMAIL_PASSWORD=""
+EMAIL_HOST="smtp.gmail.com"
+EMAIL_PORT="587"
 MOBILE_REDIRECT_URI="com.bytepace.scan-it-to-google-sheets://oauth/callback"
 SETUP_NGINX=false
 ROLLBACK=false
@@ -67,6 +77,10 @@ while [[ $# -gt 0 ]]; do
         --docs-domain)            APP_DOMAIN="$2";               shift 2 ;;
         --edit-domain)            shift 2 ;;
         --certbot-email)          CERTBOT_EMAIL="$2";            shift 2 ;;
+        --email-user)             EMAIL_USER="$2";               shift 2 ;;
+        --email-password)         EMAIL_PASSWORD="$2";           shift 2 ;;
+        --email-host)             EMAIL_HOST="$2";               shift 2 ;;
+        --email-port)             EMAIL_PORT="$2";               shift 2 ;;
         --mobile-redirect-uri)    MOBILE_REDIRECT_URI="$2";      shift 2 ;;
         --setup-nginx)            SETUP_NGINX=true;              shift   ;;
         --rollback)               ROLLBACK=true;                 shift   ;;
@@ -356,6 +370,10 @@ if ! KEYCLOAK_URL="$SETUP_KC_URL" \
 KEYCLOAK_ADMIN_PASSWORD="$KEYCLOAK_ADMIN_PASSWORD" \
 APP_DOMAIN="$APP_DOMAIN" \
 MOBILE_REDIRECT_URI="$MOBILE_REDIRECT_URI" \
+EMAIL_USER="$EMAIL_USER" \
+EMAIL_PASSWORD="$EMAIL_PASSWORD" \
+EMAIL_HOST="$EMAIL_HOST" \
+EMAIL_PORT="$EMAIL_PORT" \
     bash "${SCRIPT_DIR}/scripts/keycloak-realm-setup.sh"; then
     warn "Keycloak realm setup failed. Check /tmp/keycloak-setup.log for details."
     warn "Continuing with deployment..."

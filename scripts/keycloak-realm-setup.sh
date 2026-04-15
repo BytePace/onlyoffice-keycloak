@@ -17,6 +17,10 @@ KEYCLOAK_URL="${KEYCLOAK_URL:?}"
 KEYCLOAK_ADMIN_PASSWORD="${KEYCLOAK_ADMIN_PASSWORD:?}"
 APP_DOMAIN="${APP_DOMAIN:?}"
 MOBILE_REDIRECT_URI="${MOBILE_REDIRECT_URI:-com.bytepace.scan-it-to-google-sheets://oauth/callback}"
+EMAIL_USER="${EMAIL_USER:-}"
+EMAIL_PASSWORD="${EMAIL_PASSWORD:-}"
+EMAIL_HOST="${EMAIL_HOST:-smtp.gmail.com}"
+EMAIL_PORT="${EMAIL_PORT:-587}"
 REALM="onlyoffice"
 MAX_WAIT=120
 
@@ -60,6 +64,61 @@ kc_get()  { curl -sf  -H "$(auth_header)" "$@"; }
 kc_post() { curl -sf  -H "$(auth_header)" -H "Content-Type: application/json" -X POST  "$@"; }
 kc_put()  { curl -sf  -H "$(auth_header)" -H "Content-Type: application/json" -X PUT   "$@"; }
 
+# ── Update realm with SMTP configuration ──────────────────────────────────────
+update_realm_smtp() {
+    local token="$1"
+
+    if [[ -z "$EMAIL_USER" ]]; then
+        log "SMTP not configured (EMAIL_USER is empty) — skipping."
+        return 0
+    fi
+
+    log "Configuring SMTP for realm '${REALM}'..."
+
+    local realm_json merged http_code put_body
+    realm_json=$(curl -s -H "Authorization: Bearer $token" "${KEYCLOAK_URL}/admin/realms/${REALM}")
+    if [[ -z "$realm_json" ]] || ! echo "$realm_json" | jq -e . >/dev/null 2>&1; then
+        warn "Could not read realm for SMTP configuration (skipping)"
+        return 0
+    fi
+
+    local port_num="${EMAIL_PORT:-587}"
+    [[ "$port_num" =~ ^[0-9]+$ ]] || port_num=587
+
+    merged=$(echo "$realm_json" | jq \
+        --arg h "$EMAIL_HOST" \
+        --argjson p "$port_num" \
+        --arg u "$EMAIL_USER" \
+        --arg pw "$EMAIL_PASSWORD" \
+        '.smtpServer = {
+            host: $h,
+            port: $p,
+            auth: true,
+            starttls: true,
+            user: $u,
+            password: $pw,
+            from: $u
+        }
+        | .verifyEmail = false
+        | .resetPasswordAllowed = true') || {
+        warn "Failed to assemble SMTP JSON (jq). Configure SMTP manually in Keycloak admin console."
+        return 0
+    }
+
+    http_code=$(curl -sS -o /tmp/smtp-response.txt -w "%{http_code}" -X PUT \
+        "${KEYCLOAK_URL}/admin/realms/${REALM}" \
+        -H "Authorization: Bearer $token" \
+        -H "Content-Type: application/json; charset=UTF-8" \
+        -d "$merged")
+    put_body=$(cat /tmp/smtp-response.txt 2>/dev/null || echo "")
+
+    if [[ "$http_code" == "204" ]] || [[ "$http_code" == "200" ]]; then
+        log "SMTP configured for realm '${REALM}' (host: ${EMAIL_HOST}:${EMAIL_PORT})"
+    else
+        warn "SMTP configuration failed (HTTP $http_code). Configure manually: Realm settings → Email. Response: $put_body"
+    fi
+}
+
 # ── Create realm ──────────────────────────────────────────────────────────────
 existing_realm=$(kc_get "${KEYCLOAK_URL}/admin/realms/${REALM}" 2>/dev/null | jq -r '.realm // empty')
 if [[ "$existing_realm" == "$REALM" ]]; then
@@ -80,6 +139,9 @@ else
 EOF
     log "Realm '${REALM}' created."
 fi
+
+# ── Configure SMTP for realm ──────────────────────────────────────────────────
+update_realm_smtp "$TOKEN"
 
 # ── Helper: create or skip client ────────────────────────────────────────────
 create_client_if_missing() {
