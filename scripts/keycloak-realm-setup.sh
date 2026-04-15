@@ -254,12 +254,16 @@ else
         | jq -r '.[0].id // empty')
 
     if [[ -n "$USER_ID" ]]; then
-        # Set password
-        kc_post "${KEYCLOAK_URL}/admin/realms/${REALM}/users/${USER_ID}/reset-password" -d '{
-          "type": "password",
-          "value": "'"${TEST_USER_PASSWORD}"'",
-          "temporary": false
-        }' || warn "Could not set password for test user"
+        # Set password using PUT (not POST)
+        curl -sf -H "Authorization: Bearer ${TOKEN}" \
+          -H "Content-Type: application/json" \
+          -X PUT \
+          "${KEYCLOAK_URL}/admin/realms/${REALM}/users/${USER_ID}/reset-password" \
+          -d '{
+            "type": "password",
+            "value": "'"${TEST_USER_PASSWORD}"'",
+            "temporary": false
+          }' || warn "Could not set password for test user"
 
         log "Test user created: email=${TEST_USER_EMAIL}, password=${TEST_USER_PASSWORD} (permanent, not temporary)"
     fi
