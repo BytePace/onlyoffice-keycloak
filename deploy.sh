@@ -33,7 +33,7 @@
 #     --setup-nginx
 #
 # Rollback:
-#   sudo bash deploy.sh --rollback [--delete-all]
+#   sudo bash deploy.sh --rollback [--delete-all] [--delete-realm]
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -64,6 +64,7 @@ MOBILE_REDIRECT_URI="com.bytepace.scan-it-to-google-sheets://oauth/callback"
 SETUP_NGINX=false
 ROLLBACK=false
 DELETE_ALL=false
+DELETE_REALM=false
 KEEP_DATA=false
 
 # ── Argument parser ───────────────────────────────────────────────────────────
@@ -85,6 +86,7 @@ while [[ $# -gt 0 ]]; do
         --setup-nginx)            SETUP_NGINX=true;              shift   ;;
         --rollback)               ROLLBACK=true;                 shift   ;;
         --delete-all)             DELETE_ALL=true;               shift   ;;
+        --delete-realm)           DELETE_REALM=true;             shift   ;;
         --keep-data)              KEEP_DATA=true;                shift   ;;
         *) fail "Unknown argument: $1" ;;
     esac
@@ -94,6 +96,39 @@ done
 if [[ "$ROLLBACK" == true ]]; then
     log "Rolling back OnlyOffice SSO deployment ..."
     cd "${DEPLOY_DIR}" 2>/dev/null && docker-compose down || true
+
+    if [[ "$DELETE_REALM" == true ]]; then
+        log "Attempting to delete 'onlyoffice' realm from Keycloak ..."
+
+        # Read config to get Keycloak details
+        if [[ -f "${ENV_FILE}" ]]; then
+            KEYCLOAK_URL=$(grep "^KEYCLOAK_URL=" "${ENV_FILE}" | cut -d= -f2- | tr -d '"')
+            KEYCLOAK_ADMIN_PASSWORD=$(grep "^KEYCLOAK_ADMIN_PASSWORD=" "${ENV_FILE}" | cut -d= -f2- | tr -d '"')
+        fi
+
+        if [[ -n "$KEYCLOAK_URL" && -n "$KEYCLOAK_ADMIN_PASSWORD" ]]; then
+            # Get admin token
+            TOKEN=$(curl -s -X POST "${KEYCLOAK_URL}/realms/master/protocol/openid-connect/token" \
+                -H "Content-Type: application/x-www-form-urlencoded" \
+                -d "client_id=admin-cli&grant_type=password&username=admin&password=${KEYCLOAK_ADMIN_PASSWORD}" \
+                | jq -r '.access_token // empty' 2>/dev/null || true)
+
+            if [[ -n "$TOKEN" ]]; then
+                # Delete realm
+                if curl -sf -X DELETE "${KEYCLOAK_URL}/admin/realms/onlyoffice" \
+                    -H "Authorization: Bearer ${TOKEN}" 2>/dev/null; then
+                    success "Realm 'onlyoffice' deleted from Keycloak"
+                else
+                    warn "Could not delete realm (may not exist or auth failed)"
+                fi
+            else
+                warn "Could not get admin token for realm deletion"
+            fi
+        else
+            warn "Could not read Keycloak config for realm deletion"
+        fi
+    fi
+
     if [[ "$DELETE_ALL" == true ]]; then
         docker volume rm oo-sso-api-data oo-sso-onlyoffice-data oo-sso-onlyoffice-logs \
                          oo-sso-keycloak-db 2>/dev/null || true
