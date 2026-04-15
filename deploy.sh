@@ -100,13 +100,20 @@ if [[ "$ROLLBACK" == true ]]; then
     if [[ "$DELETE_REALM" == true ]]; then
         log "Attempting to delete 'onlyoffice' realm from Keycloak ..."
 
-        # Read config to get Keycloak details
-        if [[ -f "${ENV_FILE}" ]]; then
+        # Read config from .env if not provided via CLI
+        if [[ -z "$KEYCLOAK_URL" && -f "${ENV_FILE}" ]]; then
             KEYCLOAK_URL=$(grep "^KEYCLOAK_URL=" "${ENV_FILE}" | cut -d= -f2- | tr -d '"')
+        fi
+        if [[ -z "$KEYCLOAK_ADMIN_PASSWORD" && -f "${ENV_FILE}" ]]; then
             KEYCLOAK_ADMIN_PASSWORD=$(grep "^KEYCLOAK_ADMIN_PASSWORD=" "${ENV_FILE}" | cut -d= -f2- | tr -d '"')
         fi
 
         if [[ -n "$KEYCLOAK_URL" && -n "$KEYCLOAK_ADMIN_PASSWORD" ]]; then
+            # Ensure KEYCLOAK_URL has https://
+            if [[ ! "$KEYCLOAK_URL" =~ ^https?:// ]]; then
+                KEYCLOAK_URL="https://${KEYCLOAK_URL}"
+            fi
+
             # Get admin token
             TOKEN=$(curl -s -X POST "${KEYCLOAK_URL}/realms/master/protocol/openid-connect/token" \
                 -H "Content-Type: application/x-www-form-urlencoded" \
