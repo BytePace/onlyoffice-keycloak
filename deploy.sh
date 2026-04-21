@@ -49,6 +49,126 @@ log()     { echo -e "${BLUE}[deploy]${NC} $*" | tee -a "${LOG_FILE:-/tmp/oo-depl
 success() { echo -e "${GREEN}[deploy]${NC} $*" | tee -a "${LOG_FILE:-/tmp/oo-deploy.log}"; }
 warn()    { echo -e "${YELLOW}[deploy]${NC} $*" | tee -a "${LOG_FILE:-/tmp/oo-deploy.log}"; }
 fail()    { echo -e "${RED}[deploy] ERROR:${NC} $*" | tee -a "${LOG_FILE:-/tmp/oo-deploy.log}" >&2; exit 1; }
+APT_UPDATED=false
+
+is_apt_based() {
+    command -v apt-get >/dev/null 2>&1
+}
+
+apt_update_once() {
+    if [[ "${APT_UPDATED}" == false ]]; then
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update -y
+        APT_UPDATED=true
+    fi
+}
+
+apt_install_if_missing() {
+    local pkg="$1"
+    local cmd="${2:-$1}"
+    if command -v "$cmd" >/dev/null 2>&1; then
+        return 0
+    fi
+    if is_apt_based && dpkg -s "$pkg" >/dev/null 2>&1; then
+        return 0
+    fi
+    is_apt_based || fail "Cannot auto-install '$pkg': apt-get is not available on this OS"
+    export DEBIAN_FRONTEND=noninteractive
+    apt_update_once
+    apt-get install -y "$pkg"
+}
+
+ensure_base_dependencies() {
+    log "Checking base dependencies ..."
+    apt_install_if_missing ca-certificates
+    apt_install_if_missing curl
+    apt_install_if_missing jq
+    apt_install_if_missing openssl
+    apt_install_if_missing gnupg gpg
+    apt_install_if_missing lsb-release lsb_release
+    apt_install_if_missing git
+}
+
+ensure_docker_engine() {
+    if command -v docker >/dev/null 2>&1 && (command -v docker-compose >/dev/null 2>&1 || docker compose version >/dev/null 2>&1); then
+        return 0
+    fi
+
+    is_apt_based || fail "Docker auto-install is supported only on apt-based systems"
+
+    log "Docker / Compose not found. Installing Docker engine ..."
+    export DEBIAN_FRONTEND=noninteractive
+    apt_update_once
+    apt-get install -y ca-certificates curl gnupg lsb-release
+
+    install -m 0755 -d /etc/apt/keyrings
+    if [[ ! -f /etc/apt/keyrings/docker.asc ]]; then
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+        chmod a+r /etc/apt/keyrings/docker.asc
+    fi
+
+    local distro codename arch
+    distro="$(
+        source /etc/os-release
+        echo "${ID}"
+    )"
+    codename="$(
+        source /etc/os-release
+        echo "${VERSION_CODENAME}"
+    )"
+    arch="$(dpkg --print-architecture)"
+
+    if [[ "${distro}" != "ubuntu" && "${distro}" != "debian" ]]; then
+        fail "Unsupported distro for Docker auto-install: ${distro}"
+    fi
+
+    cat > /etc/apt/sources.list.d/docker.list <<EOF
+deb [arch=${arch} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/${distro} ${codename} stable
+EOF
+
+    apt_update_once
+    APT_UPDATED=false
+    apt_update_once
+    apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    systemctl enable --now docker || true
+}
+
+docker_compose() {
+    if command -v docker-compose >/dev/null 2>&1; then
+        docker-compose "$@"
+    else
+        docker compose "$@"
+    fi
+}
+
+has_keycloak_postgres_volume() {
+    docker volume ls -q 2>/dev/null | grep -q 'oo-sso-keycloak-db'
+}
+
+reset_keycloak_postgres_volume() {
+    log "Resetting Keycloak PostgreSQL volume ..."
+    local vols
+
+    if [[ -d "$DEPLOY_DIR" ]]; then
+        cd "$DEPLOY_DIR"
+        docker_compose --env-file .env down 2>/dev/null || docker_compose down 2>/dev/null || true
+    fi
+
+    vols=$(docker volume ls -q 2>/dev/null | grep 'oo-sso-keycloak-db' || true)
+    if [[ -z "$vols" ]]; then
+        warn "No Keycloak PostgreSQL volume found (nothing to reset)."
+        return
+    fi
+
+    while IFS= read -r vol; do
+        [[ -z "$vol" ]] && continue
+        if ! docker volume rm "$vol" >/dev/null 2>&1; then
+            fail "Could not remove Docker volume '$vol'. Stop related containers first."
+        fi
+    done <<< "$vols"
+
+    success "Keycloak PostgreSQL volume reset complete."
+}
 
 ensure_xlsx_files() {
     log "Ensuring .xlsx files exist for existing documents ..."
@@ -99,6 +219,9 @@ DELETE_REALM=false
 KEEP_DATA=false
 OO_CLIENT_SECRET=""
 KEYCLOAK_REALM="ssa"
+KEYCLOAK_VERSION="24.0"
+POSTGRES_VERSION="15-alpine"
+RESET_POSTGRES_VOLUME=false
 
 # ── Argument parser ───────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -121,6 +244,7 @@ while [[ $# -gt 0 ]]; do
         --delete-all)             DELETE_ALL=true;               shift   ;;
         --delete-realm)           DELETE_REALM=true;             shift   ;;
         --keep-data)              KEEP_DATA=true;                shift   ;;
+        --reset-postgres-volume)  RESET_POSTGRES_VOLUME=true;    shift   ;;
         *) fail "Unknown argument: $1" ;;
     esac
 done
@@ -128,7 +252,7 @@ done
 # ── Rollback ──────────────────────────────────────────────────────────────────
 if [[ "$ROLLBACK" == true ]]; then
     log "Rolling back OnlyOffice SSO deployment ..."
-    cd "${DEPLOY_DIR}" 2>/dev/null && docker-compose down || true
+    cd "${DEPLOY_DIR}" 2>/dev/null && docker_compose down || true
 
     if [[ "$DELETE_REALM" == true ]]; then
         log "Attempting to remove OnlyOffice OIDC clients from Keycloak realm '${KEYCLOAK_REALM:-ssa}' ..."
@@ -178,10 +302,15 @@ fi
 [[ $EUID -eq 0 ]] || fail "Run as root: sudo bash deploy.sh"
 
 # ── Requirements ─────────────────────────────────────────────────────────────
+ensure_base_dependencies
+ensure_docker_engine
+
 for cmd in docker curl openssl jq; do
-    command -v "$cmd" >/dev/null 2>&1 || fail "Required tool not found: $cmd"
+    command -v "$cmd" >/dev/null 2>&1 || fail "Required tool not found after bootstrap: $cmd"
 done
-docker-compose --version >/dev/null 2>&1 || fail "docker-compose not found"
+if ! command -v docker-compose >/dev/null 2>&1 && ! docker compose version >/dev/null 2>&1; then
+    fail "docker-compose/docker compose not found after bootstrap"
+fi
 
 mkdir -p "${DEPLOY_DIR}"
 touch "${LOG_FILE}"
@@ -244,11 +373,27 @@ fi
 # OIDC issuer set after secrets load (KEYCLOAK_REALM may come from .env)
 
 # ── Load or generate secrets ──────────────────────────────────────────────────
+if [[ "$KEYCLOAK_MODE" == "new" && "$RESET_POSTGRES_VOLUME" == true ]]; then
+    reset_keycloak_postgres_volume
+fi
+
+EXISTING_KEYCLOAK_PG_VOLUME=false
+if [[ "$KEYCLOAK_MODE" == "new" ]] && has_keycloak_postgres_volume; then
+    EXISTING_KEYCLOAK_PG_VOLUME=true
+fi
+
 if [[ -f "$ENV_FILE" && "$KEEP_DATA" == true ]]; then
     log "Loading existing secrets from ${ENV_FILE} ..."
     # shellcheck disable=SC1090
     source "$ENV_FILE"
+    if [[ "$KEYCLOAK_MODE" == "new" && -z "${POSTGRES_KEYCLOAK_PASSWORD:-}" ]]; then
+        fail "POSTGRES_KEYCLOAK_PASSWORD missing in ${ENV_FILE}. Fix .env or reset DB volume (--reset-postgres-volume)."
+    fi
 else
+    if [[ "$KEYCLOAK_MODE" == "new" && "$EXISTING_KEYCLOAK_PG_VOLUME" == true && "$KEEP_DATA" == true ]]; then
+        fail "Found existing Keycloak PostgreSQL volume but no reusable ${ENV_FILE}. Refusing to rotate DB password. Restore .env or rerun with --reset-postgres-volume."
+    fi
+
     log "Generating secrets ..."
     ONLYOFFICE_JWT_SECRET="$(openssl rand -hex 32)"
     if [[ "$KEYCLOAK_MODE" == "new" ]]; then
@@ -283,6 +428,8 @@ if [[ "$KEYCLOAK_MODE" == "new" ]]; then
 AUTH_DOMAIN=${AUTH_DOMAIN}
 KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD}
 POSTGRES_KEYCLOAK_PASSWORD=${POSTGRES_KEYCLOAK_PASSWORD}
+KEYCLOAK_VERSION=${KEYCLOAK_VERSION}
+POSTGRES_VERSION=${POSTGRES_VERSION}
 EOF
 fi
 chmod 600 "$ENV_FILE"
@@ -336,7 +483,7 @@ version: "3.8"
 
 services:
   postgres-keycloak:
-    image: postgres:15-alpine
+    image: postgres:${POSTGRES_VERSION}
     container_name: oo-sso-postgres
     restart: unless-stopped
     environment:
@@ -354,7 +501,7 @@ services:
       retries: 10
 
   keycloak:
-    image: quay.io/keycloak/keycloak:24.0
+    image: quay.io/keycloak/keycloak:${KEYCLOAK_VERSION}
     container_name: oo-sso-keycloak
     restart: unless-stopped
     command: start
@@ -413,17 +560,26 @@ cd "${DEPLOY_DIR}"
 log "Starting containers (docker compose up --build) ..."
 
 if [[ "$KEYCLOAK_MODE" == "new" ]]; then
-    docker-compose up -d --build postgres-keycloak
-    log "Waiting for PostgreSQL ..."
-    timeout 60 bash -c 'until docker exec oo-sso-postgres pg_isready -U keycloak -d keycloak >/dev/null 2>&1; do sleep 2; done'
-
-    docker-compose up -d --build keycloak
+    docker_compose --env-file .env up -d postgres-keycloak keycloak
     log "Waiting for Keycloak to start (up to 5 min) ..."
-    timeout 300 bash -c 'until docker logs oo-sso-keycloak 2>&1 | grep -q "Running the server"; do sleep 5; done'
+    keycloak_ready=false
+    for _ in $(seq 1 60); do
+        if docker_compose logs keycloak 2>/dev/null | grep -q "Running the server\|started in"; then
+            keycloak_ready=true
+            break
+        fi
+        sleep 5
+    done
+    if [[ "$keycloak_ready" != true ]]; then
+        if docker_compose logs keycloak 2>/dev/null | grep -q 'password authentication failed'; then
+            fail "Keycloak DB password mismatch detected. Restore ${ENV_FILE} or rerun with --reset-postgres-volume."
+        fi
+        fail "Keycloak did not become ready in time. Check logs: cd ${DEPLOY_DIR} && docker compose logs keycloak"
+    fi
     success "Keycloak is running."
 fi
 
-docker-compose up -d --build spreadsheet-api onlyoffice-docs
+docker_compose --env-file .env up -d --build spreadsheet-api onlyoffice-docs
 log "Waiting for spreadsheet-api ..."
 timeout 60 bash -c 'until curl -sf http://127.0.0.1:8000/health >/dev/null 2>&1; do sleep 3; done'
 success "Spreadsheet API is running."
@@ -474,7 +630,7 @@ if [[ -f /tmp/oo-client-secret.txt ]]; then
     # Restart the API container to apply the new secret
     log "Restarting spreadsheet-api container with new client secret..."
     cd "${DEPLOY_DIR}"
-    docker-compose up -d --no-build spreadsheet-api || warn "Failed to restart API container"
+    docker_compose --env-file .env up -d --no-build spreadsheet-api || warn "Failed to restart API container"
 else
     warn "Client secret not found. Keycloak realm setup may have failed."
 fi
