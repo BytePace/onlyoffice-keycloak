@@ -94,6 +94,14 @@ EOF
   systemctl enable --now docker || true
 }
 
+docker_compose() {
+  if command -v docker-compose >/dev/null 2>&1; then
+    docker-compose "$@"
+  else
+    docker compose "$@"
+  fi
+}
+
 [[ $EUID -eq 0 ]] || fail "Run as root"
 ensure_base_dependencies
 ensure_docker_engine
@@ -137,7 +145,7 @@ done
 
 if [[ "$ROLLBACK" == true ]]; then
   log "Rollback nextcloud-onlyoffice stack"
-  cd "$DEPLOY_DIR" 2>/dev/null && docker-compose down || true
+  cd "$DEPLOY_DIR" 2>/dev/null && docker_compose down || true
   if [[ "$DELETE_ALL" == true ]]; then
     docker volume rm nc-db nc-nextcloud nc-redis nc-oo-data nc-oo-logs 2>/dev/null || true
     rm -rf "$DEPLOY_DIR"
@@ -243,7 +251,7 @@ YAML
 
 cd "$DEPLOY_DIR"
 log "Starting containers"
-docker-compose --env-file "$ENV_FILE" up -d
+docker_compose --env-file "$ENV_FILE" up -d
 
 log "Waiting for Nextcloud"
 timeout 300 bash -c 'until curl -sf http://127.0.0.1:'"${NC_PORT}"'/status.php >/dev/null 2>&1; do sleep 5; done' || fail "Nextcloud not ready"
