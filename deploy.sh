@@ -166,7 +166,7 @@ done
 
 if [[ "$ROLLBACK" == true ]]; then
   log "Rollback nextcloud-onlyoffice stack"
-  cd "$DEPLOY_DIR" 2>/dev/null && docker_compose down || true
+  cd "$DEPLOY_DIR" 2>/dev/null && docker_compose --profile keycloak down --remove-orphans || true
   if [[ "$DELETE_ALL" == true ]]; then
     docker volume rm nc-db nc-nextcloud nc-redis nc-oo-data nc-oo-logs nc-keycloak-db 2>/dev/null || true
     rm -rf "$DEPLOY_DIR"
@@ -344,7 +344,22 @@ log "Starting containers"
 if [[ "$KEYCLOAK_MODE" == "new" ]]; then
   docker_compose --env-file "$ENV_FILE" --profile keycloak up -d postgres-keycloak keycloak
   log "Waiting for Keycloak"
-  timeout 300 bash -c 'until curl -sf http://127.0.0.1:'"${KC_PORT}"'/realms/master/.well-known/openid-configuration >/dev/null 2>&1; do sleep 5; done' || fail "Keycloak not ready"
+  keycloak_ready=false
+  for _ in $(seq 1 60); do
+    if curl -sf "http://127.0.0.1:${KC_PORT}/realms/master/.well-known/openid-configuration" >/dev/null 2>&1; then
+      keycloak_ready=true
+      break
+    fi
+    if docker_compose --profile keycloak logs keycloak 2>/dev/null | grep -q "Running the server\|started in"; then
+      keycloak_ready=true
+      break
+    fi
+    sleep 5
+  done
+  if [[ "$keycloak_ready" != true ]]; then
+    docker_compose --profile keycloak logs --tail 80 keycloak || true
+    fail "Keycloak not ready"
+  fi
 fi
 docker_compose --env-file "$ENV_FILE" up -d db redis nextcloud onlyoffice
 
