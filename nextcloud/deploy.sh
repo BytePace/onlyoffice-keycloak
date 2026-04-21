@@ -28,6 +28,7 @@ KEYCLOAK_ADMIN_PASSWORD=""
 SETUP_NGINX=false
 ROLLBACK=false
 DELETE_ALL=false
+SHOW_CONTACTS=false
 NC_PORT="8082"
 OO_PORT="8092"
 
@@ -42,6 +43,7 @@ while [[ $# -gt 0 ]]; do
     --keycloak-url) KEYCLOAK_URL="$2"; shift 2 ;;
     --keycloak-realm) KEYCLOAK_REALM="$2"; shift 2 ;;
     --keycloak-admin-password) KEYCLOAK_ADMIN_PASSWORD="$2"; shift 2 ;;
+    --show-contacts) SHOW_CONTACTS=true; shift ;;
     --setup-nginx) SETUP_NGINX=true; shift ;;
     --rollback) ROLLBACK=true; shift ;;
     --delete-all) DELETE_ALL=true; shift ;;
@@ -174,6 +176,12 @@ docker exec --user www-data nc-app php occ config:app:set onlyoffice DocumentSer
 docker exec --user www-data nc-app php occ config:app:set onlyoffice DocumentServerInternalUrl --value="http://nc-onlyoffice/" >/dev/null
 docker exec --user www-data nc-app php occ config:app:set onlyoffice StorageUrl --value="https://${APP_DOMAIN}/" >/dev/null
 docker exec --user www-data nc-app php occ config:app:set onlyoffice jwt_secret --value="${ONLYOFFICE_JWT_SECRET}" >/dev/null
+docker exec --user www-data nc-app php occ config:app:set files_sharing shareapi_allow_share_dialog_user_enumeration --value=no >/dev/null
+if [[ "$SHOW_CONTACTS" == true ]]; then
+  docker exec --user www-data nc-app php occ app:enable contactsinteraction >/dev/null 2>&1 || true
+else
+  docker exec --user www-data nc-app php occ app:disable contactsinteraction >/dev/null 2>&1 || true
+fi
 
 docker exec --user www-data nc-app php occ config:system:set trusted_domains 0 --value="${APP_DOMAIN}" >/dev/null
 docker exec --user www-data nc-app php occ config:system:set defaultapp --value="files" >/dev/null

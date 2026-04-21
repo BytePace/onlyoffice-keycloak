@@ -21,6 +21,11 @@ sudo bash deploy.sh \
   --setup-nginx
 ```
 
+To keep the contacts list visible in the top-right menu, pass:
+```bash
+sudo bash deploy.sh ... --show-contacts
+```
+
 ## Rollback
 ```bash
 sudo bash deploy.sh --rollback
@@ -34,3 +39,4 @@ sudo bash deploy.sh --rollback --delete-all
 - `user_oidc` is auto-installed and configured against Keycloak realm `ssa`
 - OIDC login entrypoint: `https://<domain>/apps/user_oidc/login/1`
 - Local login form is disabled and `/login` auto-redirects to Keycloak (`keycloak-ssa`)
+- Contacts list is hidden by default (`contactsinteraction` disabled). Use `--show-contacts` to enable it.
