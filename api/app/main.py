@@ -2,7 +2,7 @@ import os
 import secrets
 import base64
 import hashlib
-from urllib.parse import quote, urlencode, parse_qs, urlparse
+from urllib.parse import quote, urlencode
 
 import httpx
 from fastapi import Depends, HTTPException, Request, Cookie
@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi import FastAPI
 
 from .auth import get_current_user, _fetch_jwks, KEYCLOAK_ISSUER_EXTERNAL
-from .models import AddRecordsRequest, CreateDocRequest, CreateTablesRequest
+from .models import AddRecordsRequest, CreateDocRequest, CreateTablesRequest, ShareDocRequest
 from jose import jwt
 from . import onlyoffice, spreadsheet, storage
 
@@ -20,6 +20,26 @@ API_EXTERNAL_URL = os.getenv("API_EXTERNAL_URL", "")
 KEYCLOAK_ISSUER = os.getenv("KEYCLOAK_ISSUER_EXTERNAL", "")
 CLIENT_ID = "onlyoffice-client"
 CLIENT_SECRET = os.getenv("OO_CLIENT_SECRET", "")
+
+def _cookie_secure(request: Request) -> bool:
+    """Respect reverse-proxy scheme; secure cookies only on HTTPS."""
+    xf_proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
+    scheme = xf_proto or request.url.scheme
+    return scheme == "https"
+
+
+def _user_email(user: dict) -> str:
+    return (user.get("email") or user.get("preferred_username") or user.get("sub") or "").strip().lower()
+
+
+def _require_doc_access(meta: dict | None, user: dict, write: bool = False) -> str:
+    if not meta:
+        raise HTTPException(status_code=404, detail="Document not found")
+    email = _user_email(user)
+    has_access = storage.can_write(meta, email) if write else storage.can_read(meta, email)
+    if not has_access:
+        raise HTTPException(status_code=403, detail="Access denied")
+    return email
 
 
 # ── Custom exception handler for 401/403 on editor endpoints ──────────────────
@@ -74,25 +94,44 @@ async def root(request: Request):
     # Try to validate token
     try:
         user = await get_current_user(request)
-        # Token is valid, show list of documents
-        docs = storage.list_documents()
+        # Token is valid, show list of documents available for this user
+        user_email = _user_email(user)
+        docs = storage.list_documents_for_user(user_email)
 
         docs_html = ""
         if docs:
             docs_html = "<h2>Your Documents</h2><ul style='text-align: left; display: inline-block;'>"
             for doc in docs:
-                docs_html += f'<li><a href="/api/docs/{doc["id"]}/editor" style="color: #007bff; text-decoration: none;">{doc.get("title", doc["id"])}</a></li>'
+                role = storage.get_doc_role(doc, user_email) or "viewer"
+                share_btn = ""
+                if role == "owner":
+                    share_btn = (
+                        f' <button onclick="shareDocument(\'{doc["id"]}\')" style="margin-left: 10px; padding: 4px 8px; font-size: 12px;">Share</button>'
+                        f' <button onclick="manageShares(\'{doc["id"]}\')" style="margin-left: 6px; padding: 4px 8px; font-size: 12px;">Manage</button>'
+                    )
+                docs_html += (
+                    f'<li><a href="/api/docs/{doc["id"]}/editor" style="color: #007bff; text-decoration: none;">'
+                    f'{doc.get("title", doc["id"])}</a> '
+                    f'<span style="color:#777;font-size:12px;">({role})</span>{share_btn}</li>'
+                )
             docs_html += "</ul>"
         else:
-            docs_html = "<p>No documents yet. <a href='#' onclick='createDoc()' style='color: #007bff;'>Create one now</a></p>"
+            docs_html = "<p>No documents yet. <a href='#' onclick='document.getElementById(\"docName\").focus(); return false;' style='color: #007bff;'>Create one now</a></p>"
 
         user_name = user.get("name") or user.get("preferred_username", "User")
 
         if KEYCLOAK_ISSUER_EXTERNAL and API_EXTERNAL_URL:
-            _redir = API_EXTERNAL_URL.rstrip("/") + "/"
+            id_token = request.cookies.get("id_token", "")
+            _post_logout = API_EXTERNAL_URL.rstrip("/") + "/signed-out"
+            params = {
+                "client_id": CLIENT_ID,
+                "post_logout_redirect_uri": _post_logout,
+            }
+            if id_token:
+                params["id_token_hint"] = id_token
             logout_href = (
                 f"{KEYCLOAK_ISSUER_EXTERNAL.rstrip('/')}/protocol/openid-connect/logout"
-                f"?redirect_uri={quote(_redir, safe='')}"
+                f"?{urlencode(params)}"
             )
         else:
             logout_href = "#"
@@ -150,13 +189,11 @@ async def root(request: Request):
         async function createDocument(event) {
             event.preventDefault();
             const docName = document.getElementById('docName').value;
-            const token = document.cookie.split('; ').find(row => row.startsWith('access_token=')).split('=')[1];
 
             try {
-                const response = await fetch('https://sheets.bytepace.com/api/workspaces/1/docs', {
+                const response = await fetch('/api/workspaces/1/docs', {
                     method: 'POST',
                     headers: {
-                        'Authorization': 'Bearer ' + token,
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({ name: docName })
@@ -167,6 +204,67 @@ async def root(request: Request):
                     window.location.href = '/api/docs/' + docId;
                 } else {
                     alert('Failed to create document');
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+
+        async function shareDocument(docId) {
+            const email = prompt('Share with email:');
+            if (!email) return;
+            const roleInput = prompt('Role (viewer/editor):', 'viewer');
+            const role = (roleInput || 'viewer').toLowerCase();
+            if (!['viewer', 'editor'].includes(role)) {
+                alert('Role must be viewer or editor');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/docs/' + docId + '/share', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, role })
+                });
+                if (response.ok) {
+                    alert('Access granted: ' + email + ' (' + role + ')');
+                    window.location.reload();
+                } else {
+                    const text = await response.text();
+                    alert('Share failed: ' + text);
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+
+        async function manageShares(docId) {
+            try {
+                const response = await fetch('/api/docs/' + docId + '/shares');
+                if (!response.ok) {
+                    const text = await response.text();
+                    alert('Failed to load shares: ' + text);
+                    return;
+                }
+                const data = await response.json();
+                const shares = data.shares || [];
+                if (!shares.length) {
+                    alert('No shared users yet');
+                    return;
+                }
+                const listText = shares.map((s, i) => (i + 1) + '. ' + s.email + ' (' + s.role + ')').join('\\n');
+                const toRevoke = prompt('Shared users:\\n' + listText + '\\n\\nType email to revoke access (or leave empty):', '');
+                if (!toRevoke) return;
+
+                const revokeResp = await fetch('/api/docs/' + docId + '/share?email=' + encodeURIComponent(toRevoke), {
+                    method: 'DELETE'
+                });
+                if (revokeResp.ok) {
+                    alert('Access revoked for ' + toRevoke);
+                    window.location.reload();
+                } else {
+                    const text = await revokeResp.text();
+                    alert('Revoke failed: ' + text);
                 }
             } catch (error) {
                 alert('Error: ' + error.message);
@@ -192,7 +290,7 @@ def generate_pkce_pair():
 
 # ── OAuth2 Login (Authorization Code Flow with PKCE) ──────────────────────────
 @app.get("/oauth/login")
-async def oauth_login(doc_id: str = "", redirect_to: str = ""):
+async def oauth_login(request: Request, doc_id: str = "", redirect_to: str = ""):
     """Redirect to Keycloak for OAuth2 login"""
     if not KEYCLOAK_ISSUER or not CLIENT_ID:
         return HTMLResponse("<h1>Keycloak not configured</h1>", status_code=500)
@@ -212,22 +310,23 @@ async def oauth_login(doc_id: str = "", redirect_to: str = ""):
     # Store code_verifier in cookie (valid for 10 minutes)
     auth_url = f"{KEYCLOAK_ISSUER}/protocol/openid-connect/auth?{urlencode(params)}"
 
+    secure_cookie = _cookie_secure(request)
     response = RedirectResponse(url=auth_url)
     response.set_cookie(
         "pkce_verifier",
         code_verifier,
         max_age=600,
         httponly=True,
-        secure=True,
-        samesite="none"
+        secure=secure_cookie,
+        samesite="lax"
     )
     response.set_cookie(
         "oauth_state",
         params["state"],
         max_age=600,
         httponly=True,
-        secure=True,
-        samesite="none"
+        secure=secure_cookie,
+        samesite="lax"
     )
     if doc_id:
         response.set_cookie(
@@ -235,8 +334,8 @@ async def oauth_login(doc_id: str = "", redirect_to: str = ""):
             doc_id,
             max_age=600,
             httponly=True,
-            secure=True,
-            samesite="none"
+            secure=secure_cookie,
+            samesite="lax"
         )
     if redirect_to:
         response.set_cookie(
@@ -244,8 +343,8 @@ async def oauth_login(doc_id: str = "", redirect_to: str = ""):
             redirect_to,
             max_age=600,
             httponly=True,
-            secure=True,
-            samesite="none"
+            secure=secure_cookie,
+            samesite="lax"
         )
 
     return response
@@ -254,6 +353,7 @@ async def oauth_login(doc_id: str = "", redirect_to: str = ""):
 # ── OAuth2 Callback ──────────────────────────────────────────────────────────
 @app.get("/oauth/callback")
 async def oauth_callback(
+    request: Request,
     code: str = "",
     state: str = "",
     pkce_verifier: str = Cookie(None),
@@ -287,6 +387,7 @@ async def oauth_callback(
 
         token_data = token_response.json()
         access_token = token_data.get("access_token")
+        id_token = token_data.get("id_token", "")
 
         if not access_token:
             return HTMLResponse("<h1>No access token in response</h1>", status_code=400)
@@ -299,19 +400,48 @@ async def oauth_callback(
         else:
             redirect_url = "/api/"
 
+        secure_cookie = _cookie_secure(request)
         response = RedirectResponse(url=redirect_url)
         response.set_cookie(
             "access_token",
             access_token,
             max_age=3600,
             httponly=True,
-            secure=True,
+            secure=secure_cookie,
             samesite="lax"
         )
+        if id_token:
+            response.set_cookie(
+                "id_token",
+                id_token,
+                max_age=3600,
+                httponly=True,
+                secure=secure_cookie,
+                samesite="lax"
+            )
         return response
 
     except Exception as e:
         return HTMLResponse(f"<h1>Authentication error: {str(e)}</h1>", status_code=500)
+
+
+@app.get("/signed-out")
+async def signed_out():
+    """
+    Post-logout landing page from Keycloak.
+    Clears local cookies and returns user to the dashboard entrypoint.
+    """
+    response = RedirectResponse(url="/api/", status_code=302)
+    for name in [
+        "access_token",
+        "id_token",
+        "pkce_verifier",
+        "oauth_state",
+        "oauth_doc_id",
+        "oauth_redirect_to",
+    ]:
+        response.delete_cookie(name, path="/")
+    return response
 
 
 # ── OAuth2 Login Page (simple form fallback) ────────────────────────────────
@@ -408,7 +538,7 @@ async def login_page(doc_id: str = ""):
 
 @app.get("/orgs/{org_id}/workspaces")
 async def list_workspaces(org_id: str, user: dict = Depends(get_current_user)):
-    docs = storage.list_documents()
+    docs = storage.list_documents_for_user(_user_email(user))
     return [
         {
             "id": 1,
@@ -426,8 +556,60 @@ async def create_doc(
     req: CreateDocRequest,
     user: dict = Depends(get_current_user),
 ):
-    doc = storage.create_document(req.name)
+    doc = storage.create_document(req.name, _user_email(user))
     return doc["id"]
+
+
+@app.post("/docs/{doc_id}/share")
+async def share_doc(
+    doc_id: str,
+    req: ShareDocRequest,
+    user: dict = Depends(get_current_user),
+):
+    meta = storage.get_document_meta(doc_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    role = storage.get_doc_role(meta, _user_email(user))
+    if role != "owner":
+        raise HTTPException(status_code=403, detail="Only owner can share document")
+
+    try:
+        updated = storage.share_document(doc_id, req.email, req.role)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    return {"doc_id": doc_id, "shared_with": updated.get("shared_with", {})}
+
+
+@app.get("/docs/{doc_id}/shares")
+async def get_doc_shares(
+    doc_id: str,
+    user: dict = Depends(get_current_user),
+):
+    meta = storage.get_document_meta(doc_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="Document not found")
+    role = storage.get_doc_role(meta, _user_email(user))
+    if role != "owner":
+        raise HTTPException(status_code=403, detail="Only owner can view shares")
+    return {"doc_id": doc_id, "shares": storage.list_shares(doc_id)}
+
+
+@app.delete("/docs/{doc_id}/share")
+async def revoke_doc_share(
+    doc_id: str,
+    email: str,
+    user: dict = Depends(get_current_user),
+):
+    meta = storage.get_document_meta(doc_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="Document not found")
+    role = storage.get_doc_role(meta, _user_email(user))
+    if role != "owner":
+        raise HTTPException(status_code=403, detail="Only owner can revoke access")
+    updated = storage.revoke_share(doc_id, email)
+    return {"doc_id": doc_id, "shared_with": updated.get("shared_with", {})}
 
 
 @app.post("/docs/{doc_id}/tables")
@@ -437,8 +619,7 @@ async def create_tables(
     user: dict = Depends(get_current_user),
 ):
     meta = storage.get_document_meta(doc_id)
-    if not meta:
-        raise HTTPException(status_code=404, detail="Document not found")
+    _require_doc_access(meta, user, write=True)
 
     xlsx_path = storage.get_xlsx_path(doc_id)
     for table in req.tables:
@@ -457,8 +638,7 @@ async def add_records(
     user: dict = Depends(get_current_user),
 ):
     meta = storage.get_document_meta(doc_id)
-    if not meta:
-        raise HTTPException(status_code=404, detail="Document not found")
+    _require_doc_access(meta, user, write=True)
 
     spreadsheet.append_rows(
         storage.get_xlsx_path(doc_id),
@@ -475,8 +655,7 @@ async def get_records(
     user: dict = Depends(get_current_user),
 ):
     meta = storage.get_document_meta(doc_id)
-    if not meta:
-        raise HTTPException(status_code=404, detail="Document not found")
+    _require_doc_access(meta, user, write=False)
 
     rows = spreadsheet.get_rows(storage.get_xlsx_path(doc_id), table_id)
     return {"records": [{"fields": r} for r in rows]}
@@ -511,8 +690,13 @@ async def open_document(doc_id: str, request: Request):
             issuer=KEYCLOAK_ISSUER_EXTERNAL,
             options={"verify_aud": False},
         )
+        meta = storage.get_document_meta(doc_id)
+        if not storage.can_read(meta, _user_email(payload)):
+            raise HTTPException(status_code=403, detail="Access denied")
         # Token is valid, show the editor
         return RedirectResponse(url=f"/api/docs/{doc_id}/editor", status_code=302)
+    except HTTPException:
+        raise
     except Exception:
         # Token is invalid, redirect to login
         return RedirectResponse(url=f"/api/oauth/login?redirect_to=/api/docs/{doc_id}", status_code=302)
@@ -521,8 +705,7 @@ async def open_document(doc_id: str, request: Request):
 @app.get("/docs/{doc_id}/editor", response_class=HTMLResponse)
 async def get_editor(doc_id: str, user: dict = Depends(get_current_user)):
     meta = storage.get_document_meta(doc_id)
-    if not meta:
-        raise HTTPException(status_code=404, detail="Document not found")
+    _require_doc_access(meta, user, write=False)
 
     user_email = user.get("email") or user.get("sub", "user")
     config = onlyoffice.build_editor_config(
@@ -538,7 +721,10 @@ async def get_editor(doc_id: str, user: dict = Depends(get_current_user)):
 @app.get("/docs/{doc_id}/file.xlsx")
 async def get_file(doc_id: str):
     """Called by OnlyOffice Document Server to fetch the file — no user auth."""
-    xlsx_path = storage.get_xlsx_path(doc_id)
+    meta = storage.get_document_meta(doc_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="Document not found")
+    xlsx_path = storage.ensure_xlsx_exists(doc_id)
     if not xlsx_path.exists():
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(

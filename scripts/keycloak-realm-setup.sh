@@ -48,7 +48,10 @@ log "Keycloak is ready."
 log "Obtaining admin token from ${KEYCLOAK_URL}..."
 TOKEN_RESPONSE=$(curl -sfL -X POST "${KEYCLOAK_URL}/realms/master/protocol/openid-connect/token" \
     -H "Content-Type: application/x-www-form-urlencoded" \
-    -d "client_id=admin-cli&grant_type=password&username=admin&password=${KEYCLOAK_ADMIN_PASSWORD}" 2>/tmp/keycloak-curl.err || true)
+    --data-urlencode "client_id=admin-cli" \
+    --data-urlencode "grant_type=password" \
+    --data-urlencode "username=admin" \
+    --data-urlencode "password=${KEYCLOAK_ADMIN_PASSWORD}" 2>/tmp/keycloak-curl.err || true)
 
 if [[ -z "$TOKEN_RESPONSE" ]]; then
     warn "Token response is empty. Error: $(cat /tmp/keycloak-curl.err 2>/dev/null || echo 'unknown')"
@@ -169,15 +172,27 @@ create_client_if_missing "onlyoffice-client" '{
   "standardFlowEnabled": true,
   "directAccessGrantsEnabled": true,
   "serviceAccountsEnabled": true,
-  "redirectUris": ["https://'"${APP_DOMAIN}"'/api/*"],
-  "webOrigins": ["https://'"${APP_DOMAIN}"'"],
-  "attributes": {"post.logout.redirect.uris": "https://'"${APP_DOMAIN}"'/api/signed-out"}
+  "redirectUris": ["https://'"${APP_DOMAIN}"'/api/*", "http://'"${APP_DOMAIN}"'/api/*"],
+  "webOrigins": ["https://'"${APP_DOMAIN}"'", "http://'"${APP_DOMAIN}"'"],
+  "attributes": {
+    "post.logout.redirect.uris": "https://'"${APP_DOMAIN}"'/api/ https://'"${APP_DOMAIN}"'/api/signed-out http://'"${APP_DOMAIN}"'/api/ http://'"${APP_DOMAIN}"'/api/signed-out"
+  }
 }'
 
 # Retrieve the generated client secret
 CLIENT_INTERNAL_ID=$(kc_get "${KEYCLOAK_URL}/admin/realms/${REALM}/clients?clientId=onlyoffice-client" \
     | jq -r '.[0].id')
 [[ -z "$CLIENT_INTERNAL_ID" || "$CLIENT_INTERNAL_ID" == "null" ]] && fail "Could not find onlyoffice-client"
+
+# Ensure existing client has current redirect/web origin settings
+kc_get "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${CLIENT_INTERNAL_ID}" \
+  | jq --arg app "$APP_DOMAIN" '
+      .redirectUris = ["https://\($app)/api/*", "http://\($app)/api/*"]
+      | .webOrigins = ["https://\($app)", "http://\($app)"]
+      | .attributes["post.logout.redirect.uris"] = "https://\($app)/api/ https://\($app)/api/signed-out http://\($app)/api/ http://\($app)/api/signed-out"
+  ' \
+  | kc_put "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${CLIENT_INTERNAL_ID}" -d @- \
+  || warn "Could not update onlyoffice-client redirect/web origin settings"
 
 SECRET=$(kc_get "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${CLIENT_INTERNAL_ID}/client-secret" \
     | jq -r '.value')
@@ -236,8 +251,10 @@ log "Creating test user '${TEST_USER_EMAIL}' ..."
 EXISTING_USER=$(kc_get "${KEYCLOAK_URL}/admin/realms/${REALM}/users?username=${TEST_USER_EMAIL}" \
     | jq -r '.[0].id // empty')
 
+USER_ID="$EXISTING_USER"
+USER_WAS_CREATED=false
 if [[ -n "$EXISTING_USER" ]]; then
-    log "Test user '${TEST_USER_EMAIL}' already exists — skipping creation."
+    log "Test user '${TEST_USER_EMAIL}' already exists — updating for direct-grant compatibility."
 else
     log "Creating test user '${TEST_USER_EMAIL}' ..."
     kc_post "${KEYCLOAK_URL}/admin/realms/${REALM}/users" -d '{
@@ -252,9 +269,26 @@ else
     # Get user ID
     USER_ID=$(kc_get "${KEYCLOAK_URL}/admin/realms/${REALM}/users?username=${TEST_USER_EMAIL}" \
         | jq -r '.[0].id // empty')
+    USER_WAS_CREATED=true
+fi
 
-    if [[ -n "$USER_ID" ]]; then
-        # Set password using PUT (not POST)
+if [[ -n "$USER_ID" ]]; then
+    # Clear required actions (e.g. UPDATE_PASSWORD / VERIFY_EMAIL) so password grant works.
+    kc_get "${KEYCLOAK_URL}/admin/realms/${REALM}/users/${USER_ID}" \
+      | jq '
+          .enabled = true
+          | .emailVerified = true
+          | .requiredActions = []
+      ' \
+      | curl -sf -H "Authorization: Bearer ${TOKEN}" \
+          -H "Content-Type: application/json" \
+          -X PUT \
+          "${KEYCLOAK_URL}/admin/realms/${REALM}/users/${USER_ID}" \
+          -d @- \
+      || warn "Could not clear requiredActions for test user"
+
+    # Set password only when user is newly created
+    if [[ "$USER_WAS_CREATED" == true ]]; then
         curl -sf -H "Authorization: Bearer ${TOKEN}" \
           -H "Content-Type: application/json" \
           -X PUT \
@@ -264,8 +298,12 @@ else
             "value": "'"${TEST_USER_PASSWORD}"'",
             "temporary": false
           }' || warn "Could not set password for test user"
+    fi
 
-        log "Test user created: email=${TEST_USER_EMAIL}, password=${TEST_USER_PASSWORD} (permanent, not temporary)"
+    if [[ "$USER_WAS_CREATED" == true ]]; then
+        log "Test user ready: email=${TEST_USER_EMAIL}, password=${TEST_USER_PASSWORD} (direct grant enabled)"
+    else
+        log "Test user ready: email=${TEST_USER_EMAIL} (direct grant enabled; password unchanged)"
     fi
 fi
 

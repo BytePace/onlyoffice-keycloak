@@ -50,6 +50,36 @@ success() { echo -e "${GREEN}[deploy]${NC} $*" | tee -a "${LOG_FILE:-/tmp/oo-dep
 warn()    { echo -e "${YELLOW}[deploy]${NC} $*" | tee -a "${LOG_FILE:-/tmp/oo-deploy.log}"; }
 fail()    { echo -e "${RED}[deploy] ERROR:${NC} $*" | tee -a "${LOG_FILE:-/tmp/oo-deploy.log}" >&2; exit 1; }
 
+ensure_xlsx_files() {
+    log "Ensuring .xlsx files exist for existing documents ..."
+    local out
+    out=$(docker exec -i oo-sso-api python - <<'PY' 2>/tmp/oo-xlsx-migrate.err || true
+from pathlib import Path
+import openpyxl
+
+docs_dir = Path("/data/docs")
+created = 0
+
+if docs_dir.exists():
+    for meta_file in docs_dir.glob("*.meta.json"):
+        doc_id = meta_file.name[:-10]  # strip ".meta.json"
+        xlsx_path = docs_dir / f"{doc_id}.xlsx"
+        if not xlsx_path.exists():
+            wb = openpyxl.Workbook()
+            wb.save(xlsx_path)
+            created += 1
+
+print(created)
+PY
+)
+
+    if [[ "$out" =~ ^[0-9]+$ ]]; then
+        success "Document file check complete. Missing .xlsx created: ${out}"
+    else
+        warn "Could not verify/create missing .xlsx files: $(cat /tmp/oo-xlsx-migrate.err 2>/dev/null || echo unknown error)"
+    fi
+}
+
 # ── Defaults ──────────────────────────────────────────────────────────────────
 KEYCLOAK_MODE=""         # existing | new
 KEYCLOAK_URL=""          # used when mode=existing
@@ -232,7 +262,8 @@ OIDC_ISSUER_EXTERNAL="${KEYCLOAK_EXTERNAL_URL}/realms/${KEYCLOAK_REALM}"
 
 # ── Copy API source to deploy dir ─────────────────────────────────────────────
 log "Copying spreadsheet-api source to ${DEPLOY_DIR}/api/ ..."
-cp -r "${SCRIPT_DIR}/api" "${DEPLOY_DIR}/"
+rm -rf "${DEPLOY_DIR}/api"
+cp -r "${SCRIPT_DIR}/api" "${DEPLOY_DIR}/api"
 
 # ── Write .env ────────────────────────────────────────────────────────────────
 log "Writing ${ENV_FILE} ..."
@@ -447,6 +478,10 @@ if [[ -f /tmp/oo-client-secret.txt ]]; then
 else
     warn "Client secret not found. Keycloak realm setup may have failed."
 fi
+
+# Upgrade metadata-only documents (from older versions) to real XLSX files
+# so OnlyOffice can fetch them without "Download failed".
+ensure_xlsx_files
 
 # ── Setup nginx ───────────────────────────────────────────────────────────────
 if [[ "$SETUP_NGINX" == true ]]; then
