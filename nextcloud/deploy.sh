@@ -176,6 +176,7 @@ docker exec --user www-data nc-app php occ config:app:set onlyoffice StorageUrl 
 docker exec --user www-data nc-app php occ config:app:set onlyoffice jwt_secret --value="${ONLYOFFICE_JWT_SECRET}" >/dev/null
 
 docker exec --user www-data nc-app php occ config:system:set trusted_domains 0 --value="${APP_DOMAIN}" >/dev/null
+docker exec --user www-data nc-app php occ config:system:set defaultapp --value="files" >/dev/null
 
 auth_ip=$(hostname -I | awk '{print $1}')
 [[ -n "$auth_ip" ]] && docker exec --user www-data nc-app php occ config:system:set trusted_proxies 0 --value="$auth_ip" >/dev/null || true
