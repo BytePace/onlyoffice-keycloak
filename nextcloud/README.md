@@ -30,6 +30,7 @@ sudo bash deploy.sh --rollback --delete-all
 ## Notes
 - Nextcloud UI is served on `https://<domain>/`
 - OnlyOffice Document Server is served on `https://<domain>/editor/`
-- `richdocuments` app is auto-installed and configured via `occ`
+- `onlyoffice` app is auto-installed and configured via `occ` (`richdocuments` is disabled)
 - `user_oidc` is auto-installed and configured against Keycloak realm `ssa`
 - OIDC login entrypoint: `https://<domain>/apps/user_oidc/login/1`
+- Local login form is disabled and `/login` auto-redirects to Keycloak (`keycloak-ssa`)

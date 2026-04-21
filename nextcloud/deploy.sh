@@ -165,13 +165,15 @@ timeout 300 bash -c 'until curl -sf http://127.0.0.1:'"${NC_PORT}"'/status.php >
 log "Waiting for OnlyOffice"
 timeout 180 bash -c 'until curl -sf http://127.0.0.1:'"${OO_PORT}"'/healthcheck >/dev/null 2>&1; do sleep 3; done' || fail "OnlyOffice not ready"
 
-log "Configuring Nextcloud richdocuments app"
-docker exec --user www-data nc-app php occ app:install richdocuments >/dev/null 2>&1 || true
-docker exec --user www-data nc-app php occ app:enable richdocuments >/dev/null 2>&1 || true
+log "Configuring Nextcloud ONLYOFFICE app"
+docker exec --user www-data nc-app php occ app:install onlyoffice >/dev/null 2>&1 || true
+docker exec --user www-data nc-app php occ app:enable onlyoffice >/dev/null 2>&1 || true
+docker exec --user www-data nc-app php occ app:disable richdocuments >/dev/null 2>&1 || true
 
-docker exec --user www-data nc-app php occ config:app:set richdocuments wopi_url --value="https://${APP_DOMAIN}/editor/" >/dev/null
-docker exec --user www-data nc-app php occ config:app:set richdocuments public_wopi_url --value="https://${APP_DOMAIN}/editor/" >/dev/null || true
-docker exec --user www-data nc-app php occ config:app:set richdocuments jwt_secret --value="${ONLYOFFICE_JWT_SECRET}" >/dev/null
+docker exec --user www-data nc-app php occ config:app:set onlyoffice DocumentServerUrl --value="https://${APP_DOMAIN}/editor/" >/dev/null
+docker exec --user www-data nc-app php occ config:app:set onlyoffice DocumentServerInternalUrl --value="http://nc-onlyoffice/" >/dev/null
+docker exec --user www-data nc-app php occ config:app:set onlyoffice StorageUrl --value="https://${APP_DOMAIN}/" >/dev/null
+docker exec --user www-data nc-app php occ config:app:set onlyoffice jwt_secret --value="${ONLYOFFICE_JWT_SECRET}" >/dev/null
 
 docker exec --user www-data nc-app php occ config:system:set trusted_domains 0 --value="${APP_DOMAIN}" >/dev/null
 
@@ -239,6 +241,8 @@ docker exec --user www-data nc-app php occ user_oidc:provider keycloak-ssa \
   --check-bearer=1 \
   --bearer-provisioning=1 \
   --send-id-token-hint=1 >/dev/null
+docker exec --user www-data nc-app php occ config:app:set user_oidc allow_multiple_user_backends --value=0 >/dev/null
+docker exec --user www-data nc-app php occ config:system:set hide_login_form --type=boolean --value=true >/dev/null
 success "Nextcloud OIDC provider configured (keycloak-ssa)"
 
 if [[ "$SETUP_NGINX" == true ]]; then
