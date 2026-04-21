@@ -102,6 +102,11 @@ docker_compose() {
   fi
 }
 
+docker_volume_exists() {
+  local volume_name="$1"
+  docker volume inspect "$volume_name" >/dev/null 2>&1
+}
+
 keycloak_request() {
   local method="$1"
   local url="$2"
@@ -190,6 +195,9 @@ case "$KEYCLOAK_MODE" in
   new)
     [[ -n "$AUTH_DOMAIN" ]] || fail "--auth-domain is required for --keycloak-mode new"
     [[ -n "$KEYCLOAK_ADMIN_PASSWORD" ]] || KEYCLOAK_ADMIN_PASSWORD="$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 20)"
+    if [[ -z "$POSTGRES_KEYCLOAK_PASSWORD" && -f "$ENV_FILE" ]] && docker_volume_exists nc-keycloak-db; then
+      POSTGRES_KEYCLOAK_PASSWORD="$(grep '^POSTGRES_KEYCLOAK_PASSWORD=' "$ENV_FILE" | cut -d= -f2- || true)"
+    fi
     [[ -n "$POSTGRES_KEYCLOAK_PASSWORD" ]] || POSTGRES_KEYCLOAK_PASSWORD="$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 20)"
     KEYCLOAK_URL="https://${AUTH_DOMAIN}"
     KEYCLOAK_ADMIN_API_URL="http://127.0.0.1:${KC_PORT}"
