@@ -102,6 +102,19 @@ docker_compose() {
   fi
 }
 
+keycloak_request() {
+  local method="$1"
+  local url="$2"
+  shift 2
+
+  local response
+  if ! response=$(curl -fsS -X "$method" "$url" "$@"); then
+    fail "Keycloak request failed: ${method} ${url}"
+  fi
+
+  printf '%s' "$response"
+}
+
 [[ $EUID -eq 0 ]] || fail "Run as root"
 ensure_base_dependencies
 ensure_docker_engine
@@ -175,7 +188,6 @@ ENV
 chmod 600 "$ENV_FILE"
 
 cat > "$COMPOSE_FILE" <<'YAML'
-version: "3.8"
 services:
   db:
     image: mariadb:10.11
@@ -287,30 +299,34 @@ if [[ -z "$KEYCLOAK_ADMIN_PASSWORD" && -f /opt/grist-sso/.env ]]; then
 fi
 [[ -n "$KEYCLOAK_ADMIN_PASSWORD" ]] || fail "Keycloak admin password missing (pass --keycloak-admin-password or provide /opt/grist-sso/.env)"
 
-KC_TOKEN=$(curl -s -X POST "${KEYCLOAK_URL}/realms/master/protocol/openid-connect/token" \
+KC_TOKEN_RESPONSE=$(keycloak_request POST "${KEYCLOAK_URL}/realms/master/protocol/openid-connect/token" \
   -H "Content-Type: application/x-www-form-urlencoded" \
   --data-urlencode "client_id=admin-cli" \
   --data-urlencode "grant_type=password" \
   --data-urlencode "username=admin" \
   --data-urlencode "password=${KEYCLOAK_ADMIN_PASSWORD}" \
-  | jq -r '.access_token // empty')
-[[ -n "$KC_TOKEN" ]] || fail "Could not obtain Keycloak admin token"
+)
+KC_TOKEN=$(printf '%s' "$KC_TOKEN_RESPONSE" | jq -r '.access_token // empty')
+[[ -n "$KC_TOKEN" ]] || fail "Could not obtain Keycloak admin token: $(printf '%s' "$KC_TOKEN_RESPONSE" | jq -r '.error_description // .error // "empty response"' 2>/dev/null)"
 
 KC_CLIENT_ID="nextcloud"
-KC_CLIENT_UUID=$(curl -s -H "Authorization: Bearer ${KC_TOKEN}" \
-  "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients?clientId=${KC_CLIENT_ID}" | jq -r '.[0].id // empty')
+KC_CLIENTS_RESPONSE=$(keycloak_request GET "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients?clientId=${KC_CLIENT_ID}" \
+  -H "Authorization: Bearer ${KC_TOKEN}")
+KC_CLIENT_UUID=$(printf '%s' "$KC_CLIENTS_RESPONSE" | jq -r '.[0].id // empty')
 if [[ -z "$KC_CLIENT_UUID" ]]; then
-  curl -s -X POST "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients" \
+  keycloak_request POST "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients" \
     -H "Authorization: Bearer ${KC_TOKEN}" \
     -H "Content-Type: application/json" \
     -d "{\"clientId\":\"${KC_CLIENT_ID}\",\"name\":\"Nextcloud OIDC\",\"enabled\":true,\"protocol\":\"openid-connect\",\"publicClient\":false,\"standardFlowEnabled\":true,\"directAccessGrantsEnabled\":false,\"serviceAccountsEnabled\":false,\"redirectUris\":[\"https://${APP_DOMAIN}/apps/user_oidc/code\",\"https://${APP_DOMAIN}/apps/user_oidc/*\"],\"webOrigins\":[\"https://${APP_DOMAIN}\"],\"attributes\":{\"post.logout.redirect.uris\":\"https://${APP_DOMAIN}/*\"}}" >/dev/null
-  KC_CLIENT_UUID=$(curl -s -H "Authorization: Bearer ${KC_TOKEN}" \
-    "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients?clientId=${KC_CLIENT_ID}" | jq -r '.[0].id')
+  KC_CLIENTS_RESPONSE=$(keycloak_request GET "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients?clientId=${KC_CLIENT_ID}" \
+    -H "Authorization: Bearer ${KC_TOKEN}")
+  KC_CLIENT_UUID=$(printf '%s' "$KC_CLIENTS_RESPONSE" | jq -r '.[0].id // empty')
 fi
+[[ -n "$KC_CLIENT_UUID" ]] || fail "Could not resolve Keycloak client id for '${KC_CLIENT_ID}'"
 
-KC_UPDATED=$(curl -s -H "Authorization: Bearer ${KC_TOKEN}" \
-  "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${KC_CLIENT_UUID}" \
-  | jq --arg d "${APP_DOMAIN}" '
+KC_CLIENT_RESPONSE=$(keycloak_request GET "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${KC_CLIENT_UUID}" \
+  -H "Authorization: Bearer ${KC_TOKEN}")
+KC_UPDATED=$(printf '%s' "$KC_CLIENT_RESPONSE" | jq --arg d "${APP_DOMAIN}" '
       .redirectUris=["https://\($d)/apps/user_oidc/code","https://\($d)/apps/user_oidc/*"]
       | .webOrigins=["https://\($d)"]
       | .attributes["post.logout.redirect.uris"]="https://\($d)/*"
@@ -318,13 +334,14 @@ KC_UPDATED=$(curl -s -H "Authorization: Bearer ${KC_TOKEN}" \
       | .publicClient=false
       | .directAccessGrantsEnabled=false
   ')
-curl -s -X PUT "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${KC_CLIENT_UUID}" \
+keycloak_request PUT "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${KC_CLIENT_UUID}" \
   -H "Authorization: Bearer ${KC_TOKEN}" \
   -H "Content-Type: application/json" \
   -d "${KC_UPDATED}" >/dev/null
 
-KC_CLIENT_SECRET=$(curl -s -H "Authorization: Bearer ${KC_TOKEN}" \
-  "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${KC_CLIENT_UUID}/client-secret" | jq -r '.value')
+KC_CLIENT_SECRET_RESPONSE=$(keycloak_request GET "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${KC_CLIENT_UUID}/client-secret" \
+  -H "Authorization: Bearer ${KC_TOKEN}")
+KC_CLIENT_SECRET=$(printf '%s' "$KC_CLIENT_SECRET_RESPONSE" | jq -r '.value // empty')
 [[ -n "$KC_CLIENT_SECRET" ]] || fail "Could not obtain nextcloud client secret from Keycloak"
 
 docker exec --user www-data nc-app php occ app:install user_oidc >/dev/null 2>&1 || true
