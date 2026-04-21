@@ -10,7 +10,7 @@ This stack deploys Nextcloud as the primary user cabinet (files/doc list) and in
 
 ## Quick start
 ```bash
-cd nextcloud
+cd /path/to/onlyoffice-keycloak
 sudo bash deploy.sh \
   --domain sheets.bytepace.com \
   --certbot-email bytepace.sitgsa@gmail.com \
