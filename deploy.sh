@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEPLOY_DIR="/opt/nextcloud-onlyoffice"
 ENV_FILE="${DEPLOY_DIR}/.env"
 COMPOSE_FILE="${DEPLOY_DIR}/docker-compose.yml"
+COMPOSE_PROJECT_NAME="$(basename "${DEPLOY_DIR}")"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 log(){ echo -e "${BLUE}[nextcloud-deploy]${NC} $*"; }
@@ -102,9 +103,14 @@ docker_compose() {
   fi
 }
 
+compose_volume_name() {
+  local short_name="$1"
+  printf '%s_%s' "${COMPOSE_PROJECT_NAME}" "${short_name}"
+}
+
 docker_volume_exists() {
   local volume_name="$1"
-  docker volume inspect "$volume_name" >/dev/null 2>&1
+  docker volume inspect "$volume_name" >/dev/null 2>&1 || docker volume inspect "$(compose_volume_name "$volume_name")" >/dev/null 2>&1
 }
 
 keycloak_request() {
@@ -173,7 +179,15 @@ if [[ "$ROLLBACK" == true ]]; then
   log "Rollback nextcloud-onlyoffice stack"
   cd "$DEPLOY_DIR" 2>/dev/null && docker_compose --profile keycloak down --remove-orphans || true
   if [[ "$DELETE_ALL" == true ]]; then
-    docker volume rm nc-db nc-nextcloud nc-redis nc-oo-data nc-oo-logs nc-keycloak-db 2>/dev/null || true
+    docker volume rm \
+      nc-db nc-nextcloud nc-redis nc-oo-data nc-oo-logs nc-keycloak-db \
+      "$(compose_volume_name nc-db)" \
+      "$(compose_volume_name nc-nextcloud)" \
+      "$(compose_volume_name nc-redis)" \
+      "$(compose_volume_name nc-oo-data)" \
+      "$(compose_volume_name nc-oo-logs)" \
+      "$(compose_volume_name nc-keycloak-db)" \
+      2>/dev/null || true
     rm -rf "$DEPLOY_DIR"
     success "All data removed"
   else
