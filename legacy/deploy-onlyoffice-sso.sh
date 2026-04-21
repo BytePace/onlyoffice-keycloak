@@ -646,7 +646,7 @@ if [[ "$SETUP_NGINX" == true ]]; then
     KEYCLOAK_MODE="$KEYCLOAK_MODE" \
     AUTH_DOMAIN="${AUTH_DOMAIN:-}" \
     CERTBOT_EMAIL="$CERTBOT_EMAIL" \
-        bash "${SCRIPT_DIR}/scripts/setup-nginx.sh"; then
+        bash "${SCRIPT_DIR}/legacy/setup-nginx-onlyoffice-sso.sh"; then
         success "nginx configured."
     else
         warn "nginx setup encountered issues. Check /var/log/nginx/error.log"
