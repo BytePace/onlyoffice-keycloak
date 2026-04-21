@@ -61,12 +61,17 @@ TMP
   fi
   ln -sf /etc/nginx/sites-available/nextcloud-temp.conf /etc/nginx/sites-enabled/nextcloud-temp.conf
   nginx -t && systemctl reload nginx
-  CERTBOT_DOMAINS=(-d "$APP_DOMAIN")
-  if [[ "$KEYCLOAK_MODE" == "new" ]]; then
-    CERTBOT_DOMAINS+=(-d "$AUTH_DOMAIN")
+
+  if [[ "$need_app_cert" == true ]]; then
+    certbot certonly --webroot -w "$WEBROOT" --non-interactive --agree-tos -m "$CERTBOT_EMAIL" -d "$APP_DOMAIN" \
+      || warn "Certbot failed for ${APP_DOMAIN}; continuing (HTTP-only may be used)"
   fi
-  certbot certonly --webroot -w "$WEBROOT" --non-interactive --agree-tos -m "$CERTBOT_EMAIL" "${CERTBOT_DOMAINS[@]}" \
-    || warn "Certbot failed; continuing (HTTP-only may be used)"
+
+  if [[ "$need_auth_cert" == true ]]; then
+    certbot certonly --webroot -w "$WEBROOT" --non-interactive --agree-tos -m "$CERTBOT_EMAIL" -d "$AUTH_DOMAIN" \
+      || warn "Certbot failed for ${AUTH_DOMAIN}; continuing (HTTP-only may be used)"
+  fi
+
   rm -f /etc/nginx/sites-enabled/nextcloud-temp.conf
 fi
 
