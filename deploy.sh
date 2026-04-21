@@ -122,29 +122,37 @@ for c in docker curl openssl jq; do command -v "$c" >/dev/null 2>&1 || fail "Mis
 command -v docker-compose >/dev/null 2>&1 || docker compose version >/dev/null 2>&1 || fail "docker compose not found after bootstrap"
 
 APP_DOMAIN=""
+AUTH_DOMAIN=""
 CERTBOT_EMAIL=""
 NEXTCLOUD_ADMIN_USER="admin"
 NEXTCLOUD_ADMIN_PASSWORD=""
 DB_PASSWORD=""
 ONLYOFFICE_JWT_SECRET=""
+KEYCLOAK_MODE="existing"
 KEYCLOAK_URL="https://auth.bytepace.com"
 KEYCLOAK_REALM="ssa"
 KEYCLOAK_ADMIN_PASSWORD=""
+POSTGRES_KEYCLOAK_PASSWORD=""
+KEYCLOAK_VERSION="24.0"
+POSTGRES_VERSION="15-alpine"
 SETUP_NGINX=false
 ROLLBACK=false
 DELETE_ALL=false
 SHOW_CONTACTS=false
 NC_PORT="8082"
 OO_PORT="8092"
+KC_PORT="8090"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --domain|--app-domain) APP_DOMAIN="$2"; shift 2 ;;
+    --auth-domain) AUTH_DOMAIN="$2"; shift 2 ;;
     --certbot-email) CERTBOT_EMAIL="$2"; shift 2 ;;
     --nextcloud-admin-user) NEXTCLOUD_ADMIN_USER="$2"; shift 2 ;;
     --nextcloud-admin-password) NEXTCLOUD_ADMIN_PASSWORD="$2"; shift 2 ;;
     --db-password) DB_PASSWORD="$2"; shift 2 ;;
     --jwt-secret) ONLYOFFICE_JWT_SECRET="$2"; shift 2 ;;
+    --keycloak-mode) KEYCLOAK_MODE="$2"; shift 2 ;;
     --keycloak-url) KEYCLOAK_URL="$2"; shift 2 ;;
     --keycloak-realm) KEYCLOAK_REALM="$2"; shift 2 ;;
     --keycloak-admin-password) KEYCLOAK_ADMIN_PASSWORD="$2"; shift 2 ;;
@@ -160,7 +168,7 @@ if [[ "$ROLLBACK" == true ]]; then
   log "Rollback nextcloud-onlyoffice stack"
   cd "$DEPLOY_DIR" 2>/dev/null && docker_compose down || true
   if [[ "$DELETE_ALL" == true ]]; then
-    docker volume rm nc-db nc-nextcloud nc-redis nc-oo-data nc-oo-logs 2>/dev/null || true
+    docker volume rm nc-db nc-nextcloud nc-redis nc-oo-data nc-oo-logs nc-keycloak-db 2>/dev/null || true
     rm -rf "$DEPLOY_DIR"
     success "All data removed"
   else
@@ -173,17 +181,43 @@ fi
 [[ -n "$NEXTCLOUD_ADMIN_PASSWORD" ]] || NEXTCLOUD_ADMIN_PASSWORD="$(openssl rand -base64 18 | tr -dc 'A-Za-z0-9' | head -c 16)"
 [[ -n "$DB_PASSWORD" ]] || DB_PASSWORD="$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 20)"
 [[ -n "$ONLYOFFICE_JWT_SECRET" ]] || ONLYOFFICE_JWT_SECRET="$(openssl rand -hex 32)"
+case "$KEYCLOAK_MODE" in
+  existing)
+    [[ -n "$KEYCLOAK_URL" ]] || fail "--keycloak-url is required for --keycloak-mode existing"
+    [[ -n "$KEYCLOAK_ADMIN_PASSWORD" ]] || fail "--keycloak-admin-password is required for --keycloak-mode existing"
+    KEYCLOAK_ADMIN_API_URL="$KEYCLOAK_URL"
+    ;;
+  new)
+    [[ -n "$AUTH_DOMAIN" ]] || fail "--auth-domain is required for --keycloak-mode new"
+    [[ -n "$KEYCLOAK_ADMIN_PASSWORD" ]] || KEYCLOAK_ADMIN_PASSWORD="$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 20)"
+    [[ -n "$POSTGRES_KEYCLOAK_PASSWORD" ]] || POSTGRES_KEYCLOAK_PASSWORD="$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 20)"
+    KEYCLOAK_URL="https://${AUTH_DOMAIN}"
+    KEYCLOAK_ADMIN_API_URL="http://127.0.0.1:${KC_PORT}"
+    ;;
+  *)
+    fail "--keycloak-mode must be either 'existing' or 'new'"
+    ;;
+esac
 
 mkdir -p "$DEPLOY_DIR"
 
 cat > "$ENV_FILE" <<ENV
 APP_DOMAIN=${APP_DOMAIN}
+AUTH_DOMAIN=${AUTH_DOMAIN}
 NEXTCLOUD_ADMIN_USER=${NEXTCLOUD_ADMIN_USER}
 NEXTCLOUD_ADMIN_PASSWORD=${NEXTCLOUD_ADMIN_PASSWORD}
 DB_PASSWORD=${DB_PASSWORD}
 ONLYOFFICE_JWT_SECRET=${ONLYOFFICE_JWT_SECRET}
+KEYCLOAK_MODE=${KEYCLOAK_MODE}
+KEYCLOAK_URL=${KEYCLOAK_URL}
+KEYCLOAK_REALM=${KEYCLOAK_REALM}
+KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD}
+POSTGRES_KEYCLOAK_PASSWORD=${POSTGRES_KEYCLOAK_PASSWORD}
+KEYCLOAK_VERSION=${KEYCLOAK_VERSION}
+POSTGRES_VERSION=${POSTGRES_VERSION}
 NC_PORT=${NC_PORT}
 OO_PORT=${OO_PORT}
+KC_PORT=${KC_PORT}
 ENV
 chmod 600 "$ENV_FILE"
 
@@ -249,12 +283,56 @@ services:
       - nc-oo-logs:/var/log/onlyoffice
     networks: [nc-net]
 
+  postgres-keycloak:
+    image: postgres:${POSTGRES_VERSION}
+    container_name: nc-postgres-keycloak
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: ${POSTGRES_KEYCLOAK_PASSWORD}
+    volumes:
+      - nc-keycloak-db:/var/lib/postgresql/data
+    networks: [nc-net]
+    profiles: ["keycloak"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:${KEYCLOAK_VERSION}
+    container_name: nc-keycloak
+    restart: unless-stopped
+    command: start
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres-keycloak:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${POSTGRES_KEYCLOAK_PASSWORD}
+      KC_HOSTNAME: ${AUTH_DOMAIN}
+      KC_HOSTNAME_STRICT: "false"
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY: edge
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      JAVA_OPTS_APPEND: "-Xms256m -Xmx512m -XX:MetaspaceSize=96M -XX:MaxMetaspaceSize=256m"
+    ports:
+      - "127.0.0.1:${KC_PORT}:8080"
+    depends_on:
+      postgres-keycloak:
+        condition: service_healthy
+    networks: [nc-net]
+    profiles: ["keycloak"]
+
 volumes:
   nc-db:
   nc-nextcloud:
   nc-redis:
   nc-oo-data:
   nc-oo-logs:
+  nc-keycloak-db:
 
 networks:
   nc-net:
@@ -263,7 +341,12 @@ YAML
 
 cd "$DEPLOY_DIR"
 log "Starting containers"
-docker_compose --env-file "$ENV_FILE" up -d
+if [[ "$KEYCLOAK_MODE" == "new" ]]; then
+  docker_compose --env-file "$ENV_FILE" --profile keycloak up -d postgres-keycloak keycloak
+  log "Waiting for Keycloak"
+  timeout 300 bash -c 'until curl -sf http://127.0.0.1:'"${KC_PORT}"'/realms/master/.well-known/openid-configuration >/dev/null 2>&1; do sleep 5; done' || fail "Keycloak not ready"
+fi
+docker_compose --env-file "$ENV_FILE" up -d db redis nextcloud onlyoffice
 
 log "Waiting for Nextcloud"
 timeout 300 bash -c 'until curl -sf http://127.0.0.1:'"${NC_PORT}"'/status.php >/dev/null 2>&1; do sleep 5; done' || fail "Nextcloud not ready"
@@ -294,12 +377,12 @@ auth_ip=$(hostname -I | awk '{print $1}')
 [[ -n "$auth_ip" ]] && docker exec --user www-data nc-app php occ config:system:set trusted_proxies 0 --value="$auth_ip" >/dev/null || true
 
 log "Configuring Nextcloud OIDC with Keycloak (${KEYCLOAK_URL}/realms/${KEYCLOAK_REALM})"
-if [[ -z "$KEYCLOAK_ADMIN_PASSWORD" && -f /opt/grist-sso/.env ]]; then
+if [[ "$KEYCLOAK_MODE" == "existing" && -z "$KEYCLOAK_ADMIN_PASSWORD" && -f /opt/grist-sso/.env ]]; then
   KEYCLOAK_ADMIN_PASSWORD="$(grep '^KEYCLOAK_ADMIN_PASSWORD=' /opt/grist-sso/.env | cut -d= -f2- || true)"
 fi
 [[ -n "$KEYCLOAK_ADMIN_PASSWORD" ]] || fail "Keycloak admin password missing (pass --keycloak-admin-password or provide /opt/grist-sso/.env)"
 
-KC_TOKEN_RESPONSE=$(keycloak_request POST "${KEYCLOAK_URL}/realms/master/protocol/openid-connect/token" \
+KC_TOKEN_RESPONSE=$(keycloak_request POST "${KEYCLOAK_ADMIN_API_URL}/realms/master/protocol/openid-connect/token" \
   -H "Content-Type: application/x-www-form-urlencoded" \
   --data-urlencode "client_id=admin-cli" \
   --data-urlencode "grant_type=password" \
@@ -309,22 +392,34 @@ KC_TOKEN_RESPONSE=$(keycloak_request POST "${KEYCLOAK_URL}/realms/master/protoco
 KC_TOKEN=$(printf '%s' "$KC_TOKEN_RESPONSE" | jq -r '.access_token // empty')
 [[ -n "$KC_TOKEN" ]] || fail "Could not obtain Keycloak admin token: $(printf '%s' "$KC_TOKEN_RESPONSE" | jq -r '.error_description // .error // "empty response"' 2>/dev/null)"
 
+KC_REALM_STATUS=$(curl -s -o /tmp/nc-keycloak-realm.json -w "%{http_code}" \
+  -H "Authorization: Bearer ${KC_TOKEN}" \
+  "${KEYCLOAK_ADMIN_API_URL}/admin/realms/${KEYCLOAK_REALM}")
+if [[ "$KC_REALM_STATUS" == "404" ]]; then
+  keycloak_request POST "${KEYCLOAK_ADMIN_API_URL}/admin/realms" \
+    -H "Authorization: Bearer ${KC_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d "{\"realm\":\"${KEYCLOAK_REALM}\",\"enabled\":true,\"registrationAllowed\":true,\"resetPasswordAllowed\":true,\"verifyEmail\":true}" >/dev/null
+elif [[ "$KC_REALM_STATUS" != "200" ]]; then
+  fail "Could not inspect Keycloak realm '${KEYCLOAK_REALM}' (HTTP ${KC_REALM_STATUS})"
+fi
+
 KC_CLIENT_ID="nextcloud"
-KC_CLIENTS_RESPONSE=$(keycloak_request GET "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients?clientId=${KC_CLIENT_ID}" \
+KC_CLIENTS_RESPONSE=$(keycloak_request GET "${KEYCLOAK_ADMIN_API_URL}/admin/realms/${KEYCLOAK_REALM}/clients?clientId=${KC_CLIENT_ID}" \
   -H "Authorization: Bearer ${KC_TOKEN}")
 KC_CLIENT_UUID=$(printf '%s' "$KC_CLIENTS_RESPONSE" | jq -r '.[0].id // empty')
 if [[ -z "$KC_CLIENT_UUID" ]]; then
-  keycloak_request POST "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients" \
+  keycloak_request POST "${KEYCLOAK_ADMIN_API_URL}/admin/realms/${KEYCLOAK_REALM}/clients" \
     -H "Authorization: Bearer ${KC_TOKEN}" \
     -H "Content-Type: application/json" \
     -d "{\"clientId\":\"${KC_CLIENT_ID}\",\"name\":\"Nextcloud OIDC\",\"enabled\":true,\"protocol\":\"openid-connect\",\"publicClient\":false,\"standardFlowEnabled\":true,\"directAccessGrantsEnabled\":false,\"serviceAccountsEnabled\":false,\"redirectUris\":[\"https://${APP_DOMAIN}/apps/user_oidc/code\",\"https://${APP_DOMAIN}/apps/user_oidc/*\"],\"webOrigins\":[\"https://${APP_DOMAIN}\"],\"attributes\":{\"post.logout.redirect.uris\":\"https://${APP_DOMAIN}/*\"}}" >/dev/null
-  KC_CLIENTS_RESPONSE=$(keycloak_request GET "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients?clientId=${KC_CLIENT_ID}" \
+  KC_CLIENTS_RESPONSE=$(keycloak_request GET "${KEYCLOAK_ADMIN_API_URL}/admin/realms/${KEYCLOAK_REALM}/clients?clientId=${KC_CLIENT_ID}" \
     -H "Authorization: Bearer ${KC_TOKEN}")
   KC_CLIENT_UUID=$(printf '%s' "$KC_CLIENTS_RESPONSE" | jq -r '.[0].id // empty')
 fi
 [[ -n "$KC_CLIENT_UUID" ]] || fail "Could not resolve Keycloak client id for '${KC_CLIENT_ID}'"
 
-KC_CLIENT_RESPONSE=$(keycloak_request GET "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${KC_CLIENT_UUID}" \
+KC_CLIENT_RESPONSE=$(keycloak_request GET "${KEYCLOAK_ADMIN_API_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${KC_CLIENT_UUID}" \
   -H "Authorization: Bearer ${KC_TOKEN}")
 KC_UPDATED=$(printf '%s' "$KC_CLIENT_RESPONSE" | jq --arg d "${APP_DOMAIN}" '
       .redirectUris=["https://\($d)/apps/user_oidc/code","https://\($d)/apps/user_oidc/*"]
@@ -334,12 +429,12 @@ KC_UPDATED=$(printf '%s' "$KC_CLIENT_RESPONSE" | jq --arg d "${APP_DOMAIN}" '
       | .publicClient=false
       | .directAccessGrantsEnabled=false
   ')
-keycloak_request PUT "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${KC_CLIENT_UUID}" \
+keycloak_request PUT "${KEYCLOAK_ADMIN_API_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${KC_CLIENT_UUID}" \
   -H "Authorization: Bearer ${KC_TOKEN}" \
   -H "Content-Type: application/json" \
   -d "${KC_UPDATED}" >/dev/null
 
-KC_CLIENT_SECRET_RESPONSE=$(keycloak_request GET "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${KC_CLIENT_UUID}/client-secret" \
+KC_CLIENT_SECRET_RESPONSE=$(keycloak_request GET "${KEYCLOAK_ADMIN_API_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${KC_CLIENT_UUID}/client-secret" \
   -H "Authorization: Bearer ${KC_TOKEN}")
 KC_CLIENT_SECRET=$(printf '%s' "$KC_CLIENT_SECRET_RESPONSE" | jq -r '.value // empty')
 [[ -n "$KC_CLIENT_SECRET" ]] || fail "Could not obtain nextcloud client secret from Keycloak"
@@ -365,7 +460,7 @@ success "Nextcloud OIDC provider configured (keycloak-ssa)"
 
 if [[ "$SETUP_NGINX" == true ]]; then
   log "Configuring nginx"
-  APP_DOMAIN="$APP_DOMAIN" CERTBOT_EMAIL="$CERTBOT_EMAIL" NC_PORT="$NC_PORT" OO_PORT="$OO_PORT" bash "$SCRIPT_DIR/scripts/setup-nginx-nextcloud.sh"
+  APP_DOMAIN="$APP_DOMAIN" AUTH_DOMAIN="$AUTH_DOMAIN" KEYCLOAK_MODE="$KEYCLOAK_MODE" CERTBOT_EMAIL="$CERTBOT_EMAIL" NC_PORT="$NC_PORT" OO_PORT="$OO_PORT" KC_PORT="$KC_PORT" bash "$SCRIPT_DIR/scripts/setup-nginx-nextcloud.sh"
 fi
 
 cat > "${DEPLOY_DIR}/credentials.txt" <<CREDS
