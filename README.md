@@ -68,10 +68,12 @@ node scripts/browser-smoke.mjs \
   --keycloak-url https://auth.bytepace.com \
   --realm ssa \
   --keycloak-admin-password 'YOUR_ADMIN_PASSWORD' \
+  --nextcloud-admin-user admin \
+  --nextcloud-admin-password 'YOUR_NEXTCLOUD_ADMIN_PASSWORD' \
   --insecure true \
   --screenshot /tmp/onlyoffice-smoke.png
 ```
-This script creates a temporary verified Keycloak user, logs in through Keycloak, waits for Nextcloud Files, creates a spreadsheet, verifies that the ONLYOFFICE editor opens, and then deletes the temporary user.
+This script creates a temporary verified Keycloak user, logs in through Keycloak, waits for Nextcloud Files, creates a spreadsheet, verifies that the ONLYOFFICE editor opens, and then deletes the temporary user in Keycloak. If Nextcloud admin credentials are passed, it also removes the corresponding local Nextcloud OIDC user.
 
 ## Smoke Fresh
 Run full fresh reset + deploy on VPS and then browser smoke locally in one command:

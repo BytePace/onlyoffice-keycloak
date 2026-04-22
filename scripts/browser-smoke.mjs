@@ -32,6 +32,12 @@ const insecure = args.insecure === "true";
 const keycloakUrl = args["keycloak-url"] || "https://auth.bytepace.com";
 const realm = args.realm || "ssa";
 const keycloakAdminPassword = args["keycloak-admin-password"] || "";
+const nextcloudAdminUser = args["nextcloud-admin-user"] || "";
+const nextcloudAdminPassword = args["nextcloud-admin-password"] || "";
+
+if (insecure) {
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+}
 
 let username = args.username || "";
 let password = args.password || "";
@@ -132,6 +138,14 @@ try {
   await browser.close();
   if (createdSmokeUserEmail) {
     try {
+      if (nextcloudAdminUser && nextcloudAdminPassword) {
+        await deleteNextcloudUserByEmail({
+          baseUrl: normalizeBaseUrl(baseUrl),
+          email: createdSmokeUserEmail,
+          adminUser: nextcloudAdminUser,
+          adminPassword: nextcloudAdminPassword,
+        });
+      }
       deleteManagedSmokeUser({
         email: createdSmokeUserEmail,
         keycloakUrl,
@@ -288,4 +302,43 @@ function deleteManagedSmokeUser({ email, keycloakUrl, realm, keycloakAdminPasswo
     commandArgs,
     { stdio: "inherit" }
   );
+}
+
+async function deleteNextcloudUserByEmail({ baseUrl, email, adminUser, adminPassword }) {
+  const auth = Buffer.from(`${adminUser}:${adminPassword}`).toString("base64");
+  const headers = {
+    Authorization: `Basic ${auth}`,
+    "OCS-APIRequest": "true",
+    Accept: "application/json",
+  };
+
+  const usersUrl = `${baseUrl}/ocs/v2.php/cloud/users?search=${encodeURIComponent(email)}&format=json`;
+  const usersResponse = await fetch(usersUrl, { headers });
+  if (!usersResponse.ok) {
+    throw new Error(`Nextcloud user lookup failed with HTTP ${usersResponse.status}`);
+  }
+
+  const usersJson = await usersResponse.json();
+  const userIds = usersJson?.ocs?.data?.users || [];
+  for (const userId of userIds) {
+    const detailsUrl = `${baseUrl}/ocs/v2.php/cloud/users/${encodeURIComponent(userId)}?format=json`;
+    const detailsResponse = await fetch(detailsUrl, { headers });
+    if (!detailsResponse.ok) {
+      continue;
+    }
+    const detailsJson = await detailsResponse.json();
+    const userEmail = detailsJson?.ocs?.data?.email || "";
+    if (userEmail !== email) {
+      continue;
+    }
+
+    const deleteUrl = `${baseUrl}/ocs/v2.php/cloud/users/${encodeURIComponent(userId)}?format=json`;
+    const deleteResponse = await fetch(deleteUrl, {
+      method: "DELETE",
+      headers,
+    });
+    if (!deleteResponse.ok) {
+      throw new Error(`Nextcloud user delete failed for ${userId} with HTTP ${deleteResponse.status}`);
+    }
+  }
 }

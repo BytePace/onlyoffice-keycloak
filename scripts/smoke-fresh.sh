@@ -93,6 +93,9 @@ ssh "$REMOTE_HOST" \
 log "Reading Keycloak admin password from VPS credentials"
 KEYCLOAK_ADMIN_PASSWORD="$(ssh "$REMOTE_HOST" "awk -F': ' '/^Keycloak admin password:/ {print \$2}' /opt/nextcloud-onlyoffice/credentials.txt | tail -n1")"
 [[ -n "$KEYCLOAK_ADMIN_PASSWORD" ]] || fail "Could not read Keycloak admin password from /opt/nextcloud-onlyoffice/credentials.txt"
+NEXTCLOUD_ADMIN_USER="$(ssh "$REMOTE_HOST" "awk -F': ' '/^Nextcloud admin user:/ {print \$2}' /opt/nextcloud-onlyoffice/credentials.txt | tail -n1")"
+NEXTCLOUD_ADMIN_PASSWORD="$(ssh "$REMOTE_HOST" "awk -F': ' '/^Nextcloud admin password:/ {print \$2}' /opt/nextcloud-onlyoffice/credentials.txt | tail -n1")"
+[[ -n "$NEXTCLOUD_ADMIN_USER" && -n "$NEXTCLOUD_ADMIN_PASSWORD" ]] || fail "Could not read Nextcloud admin credentials from /opt/nextcloud-onlyoffice/credentials.txt"
 
 log "Running browser smoke test locally"
 node "${REPO_ROOT}/scripts/browser-smoke.mjs" \
@@ -101,6 +104,8 @@ node "${REPO_ROOT}/scripts/browser-smoke.mjs" \
   --keycloak-url "https://${AUTH_DOMAIN}" \
   --realm "${REALM}" \
   --keycloak-admin-password "${KEYCLOAK_ADMIN_PASSWORD}" \
+  --nextcloud-admin-user "${NEXTCLOUD_ADMIN_USER}" \
+  --nextcloud-admin-password "${NEXTCLOUD_ADMIN_PASSWORD}" \
   --insecure "${INSECURE}" \
   --screenshot "${SCREENSHOT_PATH}"
 
