@@ -511,6 +511,13 @@ OnlyOffice JWT secret: ${ONLYOFFICE_JWT_SECRET}
 Keycloak OIDC issuer: ${KEYCLOAK_URL}/realms/${KEYCLOAK_REALM}
 Keycloak OIDC login URL: https://${APP_DOMAIN}/apps/user_oidc/login/1
 CREDS
+if [[ "$KEYCLOAK_MODE" == "new" ]]; then
+  cat >> "${DEPLOY_DIR}/credentials.txt" <<CREDS
+Keycloak admin URL: https://${AUTH_DOMAIN}/admin/
+Keycloak admin user: admin
+Keycloak admin password: ${KEYCLOAK_ADMIN_PASSWORD}
+CREDS
+fi
 chmod 600 "${DEPLOY_DIR}/credentials.txt"
 
 success "Deployment completed"

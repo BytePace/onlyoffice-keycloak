@@ -39,6 +39,7 @@ if [[ -n "$CERTBOT_EMAIL" ]] && ([[ "$need_app_cert" == true ]] || [[ "$need_aut
   command -v certbot >/dev/null 2>&1 || apt-get install -y certbot python3-certbot-nginx
   WEBROOT="/var/www/letsencrypt"
   mkdir -p "$WEBROOT"
+  rm -f /etc/nginx/sites-enabled/nextcloud-onlyoffice.conf
   cat > /etc/nginx/sites-available/nextcloud-temp.conf <<TMP
 server {
   listen 80;
