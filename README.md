@@ -32,6 +32,12 @@ sudo bash deploy.sh --rollback
 sudo bash deploy.sh --rollback --delete-all
 ```
 
+## Fresh Reset
+```bash
+sudo bash scripts/reset-fresh.sh
+```
+This removes the current Nextcloud/OnlyOffice/Keycloak deployment artifacts, nginx vhosts, and Let's Encrypt certificates for `sheets.bytepace.com` and `auth.bytepace.com`.
+
 ## Notes
 - Nextcloud UI is served on `https://<domain>/`
 - OnlyOffice Document Server is served on `https://<domain>/editor/`
