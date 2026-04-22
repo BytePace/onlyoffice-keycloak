@@ -183,6 +183,9 @@ SHOW_CONTACTS=false
 NC_PORT="8082"
 OO_PORT="8092"
 KC_PORT="8090"
+API_PORT="8088"
+MOBILE_REDIRECT_URI="com.bytepace.scan-it-to-google-sheets://oauth/callback"
+OO_CLIENT_SECRET=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -201,6 +204,9 @@ while [[ $# -gt 0 ]]; do
     --keycloak-url) KEYCLOAK_URL="$2"; shift 2 ;;
     --keycloak-realm) KEYCLOAK_REALM="$2"; shift 2 ;;
     --keycloak-admin-password) KEYCLOAK_ADMIN_PASSWORD="$2"; shift 2 ;;
+    --postgres-keycloak-password) POSTGRES_KEYCLOAK_PASSWORD="$2"; shift 2 ;;
+    --mobile-redirect-uri) MOBILE_REDIRECT_URI="$2"; shift 2 ;;
+    --api-port) API_PORT="$2"; shift 2 ;;
     --show-contacts) SHOW_CONTACTS=true; shift ;;
     --setup-nginx) SETUP_NGINX=true; shift ;;
     --rollback) ROLLBACK=true; shift ;;
@@ -215,12 +221,14 @@ if [[ "$ROLLBACK" == true ]]; then
   if [[ "$DELETE_ALL" == true ]]; then
     docker volume rm \
       nc-db nc-nextcloud nc-redis nc-oo-data nc-oo-logs nc-keycloak-db \
+      nc-api-data \
       "$(compose_volume_name nc-db)" \
       "$(compose_volume_name nc-nextcloud)" \
       "$(compose_volume_name nc-redis)" \
       "$(compose_volume_name nc-oo-data)" \
       "$(compose_volume_name nc-oo-logs)" \
       "$(compose_volume_name nc-keycloak-db)" \
+      "$(compose_volume_name nc-api-data)" \
       2>/dev/null || true
     rm -rf "$DEPLOY_DIR"
     success "All data removed"
@@ -239,6 +247,7 @@ case "$KEYCLOAK_MODE" in
     [[ -n "$KEYCLOAK_URL" ]] || fail "--keycloak-url is required for --keycloak-mode existing"
     [[ -n "$KEYCLOAK_ADMIN_PASSWORD" ]] || fail "--keycloak-admin-password is required for --keycloak-mode existing"
     KEYCLOAK_ADMIN_API_URL="$KEYCLOAK_URL"
+    KEYCLOAK_INTERNAL_ISSUER="${KEYCLOAK_URL}/realms/${KEYCLOAK_REALM}"
     ;;
   new)
     [[ -n "$AUTH_DOMAIN" ]] || fail "--auth-domain is required for --keycloak-mode new"
@@ -249,6 +258,7 @@ case "$KEYCLOAK_MODE" in
     [[ -n "$POSTGRES_KEYCLOAK_PASSWORD" ]] || POSTGRES_KEYCLOAK_PASSWORD="$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 20)"
     KEYCLOAK_URL="https://${AUTH_DOMAIN}"
     KEYCLOAK_ADMIN_API_URL="http://127.0.0.1:${KC_PORT}"
+    KEYCLOAK_INTERNAL_ISSUER="http://keycloak:8080/realms/${KEYCLOAK_REALM}"
     ;;
   *)
     fail "--keycloak-mode must be either 'existing' or 'new'"
@@ -256,6 +266,8 @@ case "$KEYCLOAK_MODE" in
 esac
 
 mkdir -p "$DEPLOY_DIR"
+rm -rf "${DEPLOY_DIR}/api"
+cp -r "${SCRIPT_DIR}/api" "${DEPLOY_DIR}/api"
 
 cat > "$ENV_FILE" <<ENV
 APP_DOMAIN=${APP_DOMAIN}
@@ -271,6 +283,7 @@ ONLYOFFICE_JWT_SECRET=${ONLYOFFICE_JWT_SECRET}
 KEYCLOAK_MODE=${KEYCLOAK_MODE}
 KEYCLOAK_URL=${KEYCLOAK_URL}
 KEYCLOAK_REALM=${KEYCLOAK_REALM}
+KEYCLOAK_INTERNAL_ISSUER=${KEYCLOAK_INTERNAL_ISSUER}
 KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD}
 POSTGRES_KEYCLOAK_PASSWORD=${POSTGRES_KEYCLOAK_PASSWORD}
 KEYCLOAK_VERSION=${KEYCLOAK_VERSION}
@@ -278,6 +291,9 @@ POSTGRES_VERSION=${POSTGRES_VERSION}
 NC_PORT=${NC_PORT}
 OO_PORT=${OO_PORT}
 KC_PORT=${KC_PORT}
+API_PORT=${API_PORT}
+MOBILE_REDIRECT_URI=${MOBILE_REDIRECT_URI}
+OO_CLIENT_SECRET=${OO_CLIENT_SECRET}
 ENV
 chmod 600 "$ENV_FILE"
 
@@ -325,6 +341,24 @@ services:
       - "127.0.0.1:${NC_PORT}:80"
     volumes:
       - nc-nextcloud:/var/www/html
+    networks: [nc-net]
+
+  api:
+    build: ./api
+    container_name: nc-api
+    restart: unless-stopped
+    environment:
+      KEYCLOAK_ISSUER: ${KEYCLOAK_INTERNAL_ISSUER}
+      KEYCLOAK_ISSUER_EXTERNAL: ${KEYCLOAK_URL}/realms/${KEYCLOAK_REALM}
+      OO_CLIENT_SECRET: ${OO_CLIENT_SECRET}
+      ONLYOFFICE_JWT_SECRET: ${ONLYOFFICE_JWT_SECRET}
+      ONLYOFFICE_DOCS_EXTERNAL_URL: https://${APP_DOMAIN}/editor
+      API_EXTERNAL_URL: https://${APP_DOMAIN}/api
+      DATA_DIR: /data
+    volumes:
+      - nc-api-data:/data
+    ports:
+      - "127.0.0.1:${API_PORT}:8000"
     networks: [nc-net]
 
   onlyoffice:
@@ -393,6 +427,7 @@ volumes:
   nc-oo-data:
   nc-oo-logs:
   nc-keycloak-db:
+  nc-api-data:
 
 networks:
   nc-net:
@@ -421,13 +456,16 @@ if [[ "$KEYCLOAK_MODE" == "new" ]]; then
     fail "Keycloak not ready"
   fi
 fi
-docker_compose --env-file "$ENV_FILE" up -d db redis nextcloud onlyoffice
+docker_compose --env-file "$ENV_FILE" up -d db redis nextcloud onlyoffice api
 
 log "Waiting for Nextcloud"
 timeout 300 bash -c 'until curl -sf http://127.0.0.1:'"${NC_PORT}"'/status.php >/dev/null 2>&1; do sleep 5; done' || fail "Nextcloud not ready"
 
 log "Waiting for OnlyOffice"
 timeout 180 bash -c 'until curl -sf http://127.0.0.1:'"${OO_PORT}"'/healthcheck >/dev/null 2>&1; do sleep 3; done' || fail "OnlyOffice not ready"
+
+log "Waiting for OnlyOffice API"
+timeout 180 bash -c 'until curl -sf http://127.0.0.1:'"${API_PORT}"'/health >/dev/null 2>&1; do sleep 3; done' || fail "OnlyOffice API not ready"
 
 log "Configuring Nextcloud ONLYOFFICE app"
 occ_exec app:install onlyoffice >/dev/null 2>&1 || true
@@ -554,6 +592,89 @@ else
   warn "EMAIL_USER is empty; Keycloak SMTP configuration skipped"
 fi
 
+log "Configuring Keycloak clients for onlyoffice-keycloak API and mobile app"
+OO_CLIENT_ID="onlyoffice-client"
+OO_CLIENTS_RESPONSE=$(keycloak_request GET "${KEYCLOAK_ADMIN_API_URL}/admin/realms/${KEYCLOAK_REALM}/clients?clientId=${OO_CLIENT_ID}" \
+  -H "Authorization: Bearer ${KC_TOKEN}")
+OO_CLIENT_UUID=$(printf '%s' "$OO_CLIENTS_RESPONSE" | jq -r '.[0].id // empty')
+if [[ -z "$OO_CLIENT_UUID" ]]; then
+  keycloak_request POST "${KEYCLOAK_ADMIN_API_URL}/admin/realms/${KEYCLOAK_REALM}/clients" \
+    -H "Authorization: Bearer ${KC_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d "{\"clientId\":\"${OO_CLIENT_ID}\",\"name\":\"OnlyOffice Spreadsheet API\",\"enabled\":true,\"protocol\":\"openid-connect\",\"publicClient\":false,\"standardFlowEnabled\":true,\"directAccessGrantsEnabled\":true,\"serviceAccountsEnabled\":true,\"redirectUris\":[\"https://${APP_DOMAIN}/api/*\",\"http://${APP_DOMAIN}/api/*\"],\"webOrigins\":[\"https://${APP_DOMAIN}\",\"http://${APP_DOMAIN}\"],\"attributes\":{\"post.logout.redirect.uris\":\"https://${APP_DOMAIN}/api/ https://${APP_DOMAIN}/api/signed-out http://${APP_DOMAIN}/api/ http://${APP_DOMAIN}/api/signed-out\"}}" >/dev/null
+  OO_CLIENTS_RESPONSE=$(keycloak_request GET "${KEYCLOAK_ADMIN_API_URL}/admin/realms/${KEYCLOAK_REALM}/clients?clientId=${OO_CLIENT_ID}" \
+    -H "Authorization: Bearer ${KC_TOKEN}")
+  OO_CLIENT_UUID=$(printf '%s' "$OO_CLIENTS_RESPONSE" | jq -r '.[0].id // empty')
+fi
+[[ -n "$OO_CLIENT_UUID" ]] || fail "Could not resolve Keycloak client id for '${OO_CLIENT_ID}'"
+
+OO_CLIENT_RESPONSE=$(keycloak_request GET "${KEYCLOAK_ADMIN_API_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${OO_CLIENT_UUID}" \
+  -H "Authorization: Bearer ${KC_TOKEN}")
+OO_CLIENT_UPDATED=$(printf '%s' "$OO_CLIENT_RESPONSE" | jq --arg d "${APP_DOMAIN}" '
+      .redirectUris=["https://\($d)/api/*","http://\($d)/api/*"]
+      | .webOrigins=["https://\($d)","http://\($d)"]
+      | .attributes["post.logout.redirect.uris"]="https://\($d)/api/ https://\($d)/api/signed-out http://\($d)/api/ http://\($d)/api/signed-out"
+      | .standardFlowEnabled=true
+      | .publicClient=false
+      | .directAccessGrantsEnabled=true
+      | .serviceAccountsEnabled=true
+  ')
+keycloak_request PUT "${KEYCLOAK_ADMIN_API_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${OO_CLIENT_UUID}" \
+  -H "Authorization: Bearer ${KC_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d "${OO_CLIENT_UPDATED}" >/dev/null
+
+OO_CLIENT_SECRET_RESPONSE=$(keycloak_request GET "${KEYCLOAK_ADMIN_API_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${OO_CLIENT_UUID}/client-secret" \
+  -H "Authorization: Bearer ${KC_TOKEN}")
+OO_CLIENT_SECRET="$(printf '%s' "$OO_CLIENT_SECRET_RESPONSE" | jq -r '.value // empty')"
+[[ -n "$OO_CLIENT_SECRET" ]] || fail "Could not obtain onlyoffice-client secret from Keycloak"
+
+OO_MOBILE_CLIENT_ID="onlyoffice-mobile"
+OO_MOBILE_RESPONSE=$(keycloak_request GET "${KEYCLOAK_ADMIN_API_URL}/admin/realms/${KEYCLOAK_REALM}/clients?clientId=${OO_MOBILE_CLIENT_ID}" \
+  -H "Authorization: Bearer ${KC_TOKEN}")
+OO_MOBILE_UUID=$(printf '%s' "$OO_MOBILE_RESPONSE" | jq -r '.[0].id // empty')
+if [[ -z "$OO_MOBILE_UUID" ]]; then
+  keycloak_request POST "${KEYCLOAK_ADMIN_API_URL}/admin/realms/${KEYCLOAK_REALM}/clients" \
+    -H "Authorization: Bearer ${KC_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d "{\"clientId\":\"${OO_MOBILE_CLIENT_ID}\",\"name\":\"OnlyOffice Mobile (PKCE)\",\"enabled\":true,\"protocol\":\"openid-connect\",\"publicClient\":true,\"standardFlowEnabled\":true,\"directAccessGrantsEnabled\":false,\"redirectUris\":[\"${MOBILE_REDIRECT_URI}\"],\"webOrigins\":[\"+\"],\"attributes\":{\"pkce.code.challenge.method\":\"S256\"}}" >/dev/null
+  OO_MOBILE_RESPONSE=$(keycloak_request GET "${KEYCLOAK_ADMIN_API_URL}/admin/realms/${KEYCLOAK_REALM}/clients?clientId=${OO_MOBILE_CLIENT_ID}" \
+    -H "Authorization: Bearer ${KC_TOKEN}")
+  OO_MOBILE_UUID=$(printf '%s' "$OO_MOBILE_RESPONSE" | jq -r '.[0].id // empty')
+fi
+[[ -n "$OO_MOBILE_UUID" ]] || fail "Could not resolve Keycloak client id for '${OO_MOBILE_CLIENT_ID}'"
+
+OO_MOBILE_CLIENT_RESPONSE=$(keycloak_request GET "${KEYCLOAK_ADMIN_API_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${OO_MOBILE_UUID}" \
+  -H "Authorization: Bearer ${KC_TOKEN}")
+OO_MOBILE_CLIENT_UPDATED=$(printf '%s' "$OO_MOBILE_CLIENT_RESPONSE" | jq --arg r "${MOBILE_REDIRECT_URI}" '
+      .redirectUris=[$r]
+      | .webOrigins=["+"]
+      | .standardFlowEnabled=true
+      | .publicClient=true
+      | .directAccessGrantsEnabled=false
+      | .attributes["pkce.code.challenge.method"]="S256"
+  ')
+keycloak_request PUT "${KEYCLOAK_ADMIN_API_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${OO_MOBILE_UUID}" \
+  -H "Authorization: Bearer ${KC_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d "${OO_MOBILE_CLIENT_UPDATED}" >/dev/null
+
+OO_MAPPER_EXISTS=$(keycloak_request GET "${KEYCLOAK_ADMIN_API_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${OO_MOBILE_UUID}/protocol-mappers/models" \
+  -H "Authorization: Bearer ${KC_TOKEN}" | jq -r '.[] | select(.name=="onlyoffice-audience") | .id // empty' || true)
+if [[ -z "$OO_MAPPER_EXISTS" ]]; then
+  keycloak_request POST "${KEYCLOAK_ADMIN_API_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${OO_MOBILE_UUID}/protocol-mappers/models" \
+    -H "Authorization: Bearer ${KC_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d '{"name":"onlyoffice-audience","protocol":"openid-connect","protocolMapper":"oidc-audience-mapper","consentRequired":false,"config":{"included.client.audience":"onlyoffice-client","access.token.claim":"true","id.token.claim":"false"}}' >/dev/null
+fi
+
+if grep -q '^OO_CLIENT_SECRET=' "$ENV_FILE"; then
+  sed -i "s|^OO_CLIENT_SECRET=.*|OO_CLIENT_SECRET=${OO_CLIENT_SECRET}|" "$ENV_FILE"
+else
+  echo "OO_CLIENT_SECRET=${OO_CLIENT_SECRET}" >> "$ENV_FILE"
+fi
+docker_compose --env-file "$ENV_FILE" up -d api >/dev/null || true
+
 KC_CLIENT_ID="nextcloud"
 KC_CLIENTS_RESPONSE=$(keycloak_request GET "${KEYCLOAK_ADMIN_API_URL}/admin/realms/${KEYCLOAK_REALM}/clients?clientId=${KC_CLIENT_ID}" \
   -H "Authorization: Bearer ${KC_TOKEN}")
@@ -609,7 +730,7 @@ success "Nextcloud OIDC provider configured (keycloak-ssa)"
 
 if [[ "$SETUP_NGINX" == true ]]; then
   log "Configuring nginx"
-  APP_DOMAIN="$APP_DOMAIN" AUTH_DOMAIN="$AUTH_DOMAIN" KEYCLOAK_MODE="$KEYCLOAK_MODE" CERTBOT_EMAIL="$CERTBOT_EMAIL" NC_PORT="$NC_PORT" OO_PORT="$OO_PORT" KC_PORT="$KC_PORT" bash "$SCRIPT_DIR/scripts/setup-nginx-nextcloud.sh"
+  APP_DOMAIN="$APP_DOMAIN" AUTH_DOMAIN="$AUTH_DOMAIN" KEYCLOAK_MODE="$KEYCLOAK_MODE" CERTBOT_EMAIL="$CERTBOT_EMAIL" NC_PORT="$NC_PORT" OO_PORT="$OO_PORT" KC_PORT="$KC_PORT" API_PORT="$API_PORT" bash "$SCRIPT_DIR/scripts/setup-nginx-nextcloud.sh"
 fi
 
 cat > "${DEPLOY_DIR}/credentials.txt" <<CREDS
@@ -617,11 +738,13 @@ Nextcloud + OnlyOffice deployment
 Generated: $(date)
 
 URL: https://${APP_DOMAIN}
+OnlyOffice API URL: https://${APP_DOMAIN}/api
 Nextcloud admin user: ${NEXTCLOUD_ADMIN_USER}
 Nextcloud admin password: ${NEXTCLOUD_ADMIN_PASSWORD}
 OnlyOffice JWT secret: ${ONLYOFFICE_JWT_SECRET}
 Keycloak OIDC issuer: ${KEYCLOAK_URL}/realms/${KEYCLOAK_REALM}
 Keycloak OIDC login URL: https://${APP_DOMAIN}/apps/user_oidc/login/1
+OnlyOffice client secret: ${OO_CLIENT_SECRET}
 CREDS
 if [[ "$KEYCLOAK_MODE" == "new" ]]; then
   cat >> "${DEPLOY_DIR}/credentials.txt" <<CREDS
@@ -634,5 +757,19 @@ chmod 600 "${DEPLOY_DIR}/credentials.txt"
 
 success "Deployment completed"
 success "Nextcloud: https://${APP_DOMAIN}"
+success "OnlyOffice API: https://${APP_DOMAIN}/api"
 success "OnlyOffice endpoint: https://${APP_DOMAIN}/editor/"
 success "Credentials: ${DEPLOY_DIR}/credentials.txt"
+
+cat > "${DEPLOY_DIR}/deploy-output.txt" <<OUTPUT
+{
+  "onlyoffice": {
+    "api_url": "https://${APP_DOMAIN}/api",
+    "oidc_issuer": "${KEYCLOAK_URL}/realms/${KEYCLOAK_REALM}",
+    "client_id": "onlyoffice-mobile",
+    "redirect_uri": "${MOBILE_REDIRECT_URI}"
+  }
+}
+OUTPUT
+chmod 600 "${DEPLOY_DIR}/deploy-output.txt"
+success "Mobile config: ${DEPLOY_DIR}/deploy-output.txt"

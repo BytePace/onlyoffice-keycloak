@@ -7,6 +7,7 @@ This stack deploys Nextcloud as the primary user cabinet (files/doc list) and in
 - `mariadb:10.11`
 - `redis:7-alpine`
 - `onlyoffice/documentserver:latest`
+- `onlyoffice-keycloak` spreadsheet API (`/api`)
 
 ## Quick start
 ```bash
@@ -87,6 +88,7 @@ By default it targets `root@91.99.85.118`, deploys `sheets.bytepace.com` + `auth
 
 ## Notes
 - Nextcloud UI is served on `https://<domain>/`
+- OnlyOffice API is served on `https://<domain>/api`
 - OnlyOffice Document Server is served on `https://<domain>/editor/`
 - `onlyoffice` app is auto-installed and configured via `occ` (`richdocuments` is disabled)
 - `user_oidc` is auto-installed and configured against Keycloak realm `ssa`
@@ -94,3 +96,4 @@ By default it targets `root@91.99.85.118`, deploys `sheets.bytepace.com` + `auth
 - Local login form is disabled and `/login` auto-redirects to Keycloak (`keycloak-ssa`)
 - Contacts list is hidden by default (`contactsinteraction` disabled). Use `--show-contacts` to enable it.
 - To configure mail for both Keycloak and Nextcloud, pass `--email-user`, `--email-password`, optionally `--email-host` and `--email-port`.
+- iOS mobile config JSON is written to `/opt/nextcloud-onlyoffice/deploy-output.txt`.

@@ -8,6 +8,7 @@ CERTBOT_EMAIL="${CERTBOT_EMAIL:-}"
 NC_PORT="${NC_PORT:-8082}"
 OO_PORT="${OO_PORT:-8092}"
 KC_PORT="${KC_PORT:-8090}"
+API_PORT="${API_PORT:-8088}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATE="${SCRIPT_DIR}/../nginx/nextcloud-onlyoffice.conf.template"
 KEYCLOAK_TEMPLATE="${SCRIPT_DIR}/../nginx/keycloak-server-block.template"
@@ -82,6 +83,7 @@ sed \
   -e "s|{APP_DOMAIN}|${APP_DOMAIN}|g" \
   -e "s|{NC_PORT}|${NC_PORT}|g" \
   -e "s|{OO_PORT}|${OO_PORT}|g" \
+  -e "s|{API_PORT}|${API_PORT}|g" \
   "$TEMPLATE" \
   | awk -v block="$AUTH_BLOCK" '{gsub(/{AUTH_SERVER_BLOCK}/, block); print}' \
   > "$CONF_DEST"

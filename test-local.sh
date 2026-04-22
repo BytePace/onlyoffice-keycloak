@@ -19,7 +19,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # ── Defaults (change these to match your environment) ──────────────────────────
 KEYCLOAK_URL="${KEYCLOAK_URL:-https://auth.bytepace.com}"
 APP_DOMAIN="${APP_DOMAIN:-sheets.bytepace.com}"
-CLIENT_SECRET="${CLIENT_SECRET:-2KO2YVLLZTSgvVUNxQbKpi2zawid996V}"
+CLIENT_SECRET="${CLIENT_SECRET:-}"
 TEST_USER="${TEST_USER:-ruslan.musagitov@gmail.com}"
 TEST_PASSWORD="${TEST_PASSWORD:-}"
 REALM="ssa"
@@ -56,6 +56,12 @@ if [[ -z "$TEST_PASSWORD" ]]; then
     echo "2. Interactive:"
     read -sp "Enter password for $TEST_USER: " TEST_PASSWORD
     echo ""
+fi
+
+if [[ -z "$CLIENT_SECRET" ]]; then
+    echo -e "${YELLOW}⚠${NC} CLIENT_SECRET not set"
+    echo "Set it from /opt/nextcloud-onlyoffice/credentials.txt (OnlyOffice client secret)."
+    exit 1
 fi
 
 # ── Run integration test ──────────────────────────────────────────────────────

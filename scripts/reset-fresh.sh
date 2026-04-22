@@ -17,7 +17,7 @@ if [[ -f "$REPO_DEPLOY_SH" ]]; then
 fi
 
 log "Removing known containers"
-for container in nc-app nc-db nc-redis nc-onlyoffice nc-keycloak nc-postgres-keycloak; do
+for container in nc-app nc-db nc-redis nc-onlyoffice nc-keycloak nc-postgres-keycloak nc-api; do
   docker rm -f "$container" 2>/dev/null || true
 done
 
@@ -34,12 +34,14 @@ for volume in \
   nextcloud-onlyoffice_nc-oo-data \
   nextcloud-onlyoffice_nc-oo-logs \
   nextcloud-onlyoffice_nc-keycloak-db \
+  nextcloud-onlyoffice_nc-api-data \
   nc-db \
   nc-nextcloud \
   nc-redis \
   nc-oo-data \
   nc-oo-logs \
-  nc-keycloak-db; do
+  nc-keycloak-db \
+  nc-api-data; do
   docker volume rm "$volume" 2>/dev/null || true
 done
 
