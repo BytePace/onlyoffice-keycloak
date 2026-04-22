@@ -135,6 +135,10 @@ command -v docker-compose >/dev/null 2>&1 || docker compose version >/dev/null 2
 APP_DOMAIN=""
 AUTH_DOMAIN=""
 CERTBOT_EMAIL=""
+EMAIL_USER=""
+EMAIL_PASSWORD=""
+EMAIL_HOST="smtp.gmail.com"
+EMAIL_PORT="587"
 NEXTCLOUD_ADMIN_USER="admin"
 NEXTCLOUD_ADMIN_PASSWORD=""
 DB_PASSWORD=""
@@ -159,6 +163,10 @@ while [[ $# -gt 0 ]]; do
     --domain|--app-domain) APP_DOMAIN="$2"; shift 2 ;;
     --auth-domain) AUTH_DOMAIN="$2"; shift 2 ;;
     --certbot-email) CERTBOT_EMAIL="$2"; shift 2 ;;
+    --email-user) EMAIL_USER="$2"; shift 2 ;;
+    --email-password) EMAIL_PASSWORD="$2"; shift 2 ;;
+    --email-host) EMAIL_HOST="$2"; shift 2 ;;
+    --email-port) EMAIL_PORT="$2"; shift 2 ;;
     --nextcloud-admin-user) NEXTCLOUD_ADMIN_USER="$2"; shift 2 ;;
     --nextcloud-admin-password) NEXTCLOUD_ADMIN_PASSWORD="$2"; shift 2 ;;
     --db-password) DB_PASSWORD="$2"; shift 2 ;;
@@ -226,6 +234,10 @@ mkdir -p "$DEPLOY_DIR"
 cat > "$ENV_FILE" <<ENV
 APP_DOMAIN=${APP_DOMAIN}
 AUTH_DOMAIN=${AUTH_DOMAIN}
+EMAIL_USER=${EMAIL_USER}
+EMAIL_PASSWORD=${EMAIL_PASSWORD}
+EMAIL_HOST=${EMAIL_HOST}
+EMAIL_PORT=${EMAIL_PORT}
 NEXTCLOUD_ADMIN_USER=${NEXTCLOUD_ADMIN_USER}
 NEXTCLOUD_ADMIN_PASSWORD=${NEXTCLOUD_ADMIN_PASSWORD}
 DB_PASSWORD=${DB_PASSWORD}
@@ -439,6 +451,46 @@ if [[ "$KC_REALM_STATUS" == "404" ]]; then
     -d "{\"realm\":\"${KEYCLOAK_REALM}\",\"enabled\":true,\"registrationAllowed\":true,\"resetPasswordAllowed\":true,\"verifyEmail\":true}" >/dev/null
 elif [[ "$KC_REALM_STATUS" != "200" ]]; then
   fail "Could not inspect Keycloak realm '${KEYCLOAK_REALM}' (HTTP ${KC_REALM_STATUS})"
+fi
+
+if [[ -n "$EMAIL_USER" ]]; then
+  realm_json=$(curl -s \
+    -H "Authorization: Bearer ${KC_TOKEN}" \
+    "${KEYCLOAK_ADMIN_API_URL}/admin/realms/${KEYCLOAK_REALM}")
+  [[ -n "$realm_json" ]] || fail "Could not load Keycloak realm '${KEYCLOAK_REALM}' for SMTP configuration"
+
+  smtp_port="${EMAIL_PORT:-587}"
+  [[ "$smtp_port" =~ ^[0-9]+$ ]] || smtp_port=587
+
+  smtp_payload=$(printf '%s' "$realm_json" | jq \
+    --arg host "$EMAIL_HOST" \
+    --argjson port "$smtp_port" \
+    --arg user "$EMAIL_USER" \
+    --arg password "$EMAIL_PASSWORD" '
+      .smtpServer = {
+        host: $host,
+        port: $port,
+        auth: true,
+        starttls: true,
+        user: $user,
+        password: $password,
+        from: $user
+      }
+      | .resetPasswordAllowed = true
+    ') || fail "Could not assemble SMTP configuration payload"
+
+  smtp_status=$(curl -s -o /tmp/nc-keycloak-smtp.json -w "%{http_code}" \
+    -X PUT \
+    -H "Authorization: Bearer ${KC_TOKEN}" \
+    -H "Content-Type: application/json" \
+    "${KEYCLOAK_ADMIN_API_URL}/admin/realms/${KEYCLOAK_REALM}" \
+    -d "${smtp_payload}")
+  if [[ "$smtp_status" != "200" && "$smtp_status" != "204" ]]; then
+    fail "Failed to configure SMTP for Keycloak realm '${KEYCLOAK_REALM}' (HTTP ${smtp_status}): $(cat /tmp/nc-keycloak-smtp.json 2>/dev/null || true)"
+  fi
+  success "Keycloak SMTP configured (${EMAIL_HOST}:${smtp_port}, from ${EMAIL_USER})"
+else
+  warn "EMAIL_USER is empty; Keycloak SMTP configuration skipped"
 fi
 
 KC_CLIENT_ID="nextcloud"
