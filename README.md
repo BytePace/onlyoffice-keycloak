@@ -68,9 +68,20 @@ node scripts/browser-smoke.mjs \
   --keycloak-url https://auth.bytepace.com \
   --realm ssa \
   --keycloak-admin-password 'YOUR_ADMIN_PASSWORD' \
+  --insecure true \
   --screenshot /tmp/onlyoffice-smoke.png
 ```
 This script creates a temporary verified Keycloak user, logs in through Keycloak, waits for Nextcloud Files, creates a spreadsheet, verifies that the ONLYOFFICE editor opens, and then deletes the temporary user.
+
+## Smoke Fresh
+Run full fresh reset + deploy on VPS and then browser smoke locally in one command:
+```bash
+bash scripts/smoke-fresh.sh \
+  --certbot-email ruslan.musagitov@gmail.com \
+  --email-user bytepace.sitgsa@gmail.com \
+  --email-password 'SMTP_APP_PASSWORD'
+```
+By default it targets `root@91.99.85.118`, deploys `sheets.bytepace.com` + `auth.bytepace.com`, reads the generated Keycloak admin password from `/opt/nextcloud-onlyoffice/credentials.txt`, and runs `scripts/browser-smoke.mjs` with managed smoke user.
 
 ## Notes
 - Nextcloud UI is served on `https://<domain>/`
@@ -80,4 +91,4 @@ This script creates a temporary verified Keycloak user, logs in through Keycloak
 - OIDC login entrypoint: `https://<domain>/apps/user_oidc/login/1`
 - Local login form is disabled and `/login` auto-redirects to Keycloak (`keycloak-ssa`)
 - Contacts list is hidden by default (`contactsinteraction` disabled). Use `--show-contacts` to enable it.
-- To configure mail for Keycloak password reset / verification, pass `--email-user`, `--email-password`, optionally `--email-host` and `--email-port`.
+- To configure mail for both Keycloak and Nextcloud, pass `--email-user`, `--email-password`, optionally `--email-host` and `--email-port`.

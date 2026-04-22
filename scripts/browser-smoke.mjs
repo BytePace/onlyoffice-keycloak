@@ -28,6 +28,7 @@ const timeoutMs = Number(args.timeout || 60000);
 const screenshotPath = args.screenshot || "";
 const fileName = args["file-name"] || `Smoke ${Date.now()}`;
 const useManagedSmokeUser = args["manage-smoke-user"] === "true";
+const insecure = args.insecure === "true";
 const keycloakUrl = args["keycloak-url"] || "https://auth.bytepace.com";
 const realm = args.realm || "ssa";
 const keycloakAdminPassword = args["keycloak-admin-password"] || "";
@@ -54,7 +55,10 @@ if (useManagedSmokeUser) {
 }
 
 const browser = await chromium.launch({ headless });
-const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+const page = await browser.newPage({
+  viewport: { width: 1440, height: 900 },
+  ignoreHTTPSErrors: insecure,
+});
 page.setDefaultTimeout(timeoutMs);
 
 try {
@@ -81,6 +85,7 @@ try {
 
   await page.waitForURL(/\/apps\/files\/files/, { timeout: timeoutMs });
   await page.waitForLoadState("networkidle");
+  await dismissFirstRunWizard(page);
 
   const newButton = page.getByRole("button", { name: /^New$/i }).first();
   await newButton.click();
@@ -91,10 +96,15 @@ try {
   await spreadsheetOption.waitFor({ state: "visible", timeout: timeoutMs });
   await spreadsheetOption.click();
 
-  const nameInput = page.locator('input[type="text"]').filter({ has: page.locator(":scope") }).first();
+  const createDialog = page.getByRole("dialog").filter({ hasText: /new spreadsheet/i }).first();
+  await createDialog.waitFor({ state: "visible", timeout: timeoutMs });
+
+  const nameInput = createDialog.locator('input[type="text"]').first();
   await nameInput.waitFor({ state: "visible", timeout: timeoutMs });
-  await nameInput.fill(fileName);
-  await page.keyboard.press("Enter");
+  await nameInput.fill(`${fileName}.xlsx`);
+
+  const createButton = createDialog.getByRole("button", { name: /create/i }).first();
+  await createButton.click();
 
   await waitForEditor(page, timeoutMs);
 
@@ -202,44 +212,80 @@ async function waitForEditor(page, timeoutMs) {
   await Promise.any(editorSignals);
 }
 
+async function dismissFirstRunWizard(page) {
+  const wizard = page.locator("#firstrunwizard");
+  if (!(await wizard.count())) {
+    return;
+  }
+  if (!(await wizard.first().isVisible().catch(() => false))) {
+    return;
+  }
+
+  const closeCandidates = [
+    page.locator('#firstrunwizard button[aria-label*="Close" i]').first(),
+    page.locator('#firstrunwizard button[title*="Close" i]').first(),
+    page.locator('#firstrunwizard [class*="close"]').first(),
+  ];
+
+  for (const locator of closeCandidates) {
+    if (await locator.count()) {
+      await locator.click({ force: true }).catch(() => {});
+      if (!(await wizard.first().isVisible().catch(() => false))) {
+        return;
+      }
+    }
+  }
+
+  await page.keyboard.press("Escape").catch(() => {});
+  await wizard.first().waitFor({ state: "hidden", timeout: 10000 }).catch(() => {});
+}
+
 function createManagedSmokeUser({ email, password, keycloakUrl, realm, keycloakAdminPassword }) {
   const scriptPath = join(SCRIPT_DIR, "manage-smoke-user.sh");
+  const commandArgs = [
+    scriptPath,
+    "create",
+    "--keycloak-url",
+    keycloakUrl,
+    "--realm",
+    realm,
+    "--keycloak-admin-password",
+    keycloakAdminPassword,
+    "--email",
+    email,
+    "--password",
+    password,
+  ];
+  if (insecure) {
+    commandArgs.push("--insecure");
+  }
   execFileSync(
     "bash",
-    [
-      scriptPath,
-      "create",
-      "--keycloak-url",
-      keycloakUrl,
-      "--realm",
-      realm,
-      "--keycloak-admin-password",
-      keycloakAdminPassword,
-      "--email",
-      email,
-      "--password",
-      password,
-    ],
+    commandArgs,
     { stdio: "inherit" }
   );
 }
 
 function deleteManagedSmokeUser({ email, keycloakUrl, realm, keycloakAdminPassword }) {
   const scriptPath = join(SCRIPT_DIR, "manage-smoke-user.sh");
+  const commandArgs = [
+    scriptPath,
+    "delete",
+    "--keycloak-url",
+    keycloakUrl,
+    "--realm",
+    realm,
+    "--keycloak-admin-password",
+    keycloakAdminPassword,
+    "--email",
+    email,
+  ];
+  if (insecure) {
+    commandArgs.push("--insecure");
+  }
   execFileSync(
     "bash",
-    [
-      scriptPath,
-      "delete",
-      "--keycloak-url",
-      keycloakUrl,
-      "--realm",
-      realm,
-      "--keycloak-admin-password",
-      keycloakAdminPassword,
-      "--email",
-      email,
-    ],
+    commandArgs,
     { stdio: "inherit" }
   );
 }

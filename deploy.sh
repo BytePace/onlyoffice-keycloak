@@ -103,6 +103,10 @@ docker_compose() {
   fi
 }
 
+occ_exec() {
+  docker exec --user www-data nc-app php occ "$@"
+}
+
 compose_volume_name() {
   local short_name="$1"
   printf '%s_%s' "${COMPOSE_PROJECT_NAME}" "${short_name}"
@@ -124,6 +128,28 @@ keycloak_request() {
   fi
 
   printf '%s' "$response"
+}
+
+ensure_nextcloud_oidc_app() {
+  local install_output=""
+  local enable_output=""
+
+  for _ in $(seq 1 12); do
+    if occ_exec list 2>/dev/null | grep -q 'user_oidc:provider'; then
+      return 0
+    fi
+
+    install_output="$(occ_exec app:install user_oidc 2>&1 || true)"
+    enable_output="$(occ_exec app:enable user_oidc 2>&1 || true)"
+
+    if occ_exec list 2>/dev/null | grep -q 'user_oidc:provider'; then
+      return 0
+    fi
+
+    sleep 5
+  done
+
+  fail "Nextcloud app 'user_oidc' did not expose the user_oidc:provider OCC command. app:install output: ${install_output:-<empty>}; app:enable output: ${enable_output:-<empty>}"
 }
 
 [[ $EUID -eq 0 ]] || fail "Run as root"
@@ -404,26 +430,61 @@ log "Waiting for OnlyOffice"
 timeout 180 bash -c 'until curl -sf http://127.0.0.1:'"${OO_PORT}"'/healthcheck >/dev/null 2>&1; do sleep 3; done' || fail "OnlyOffice not ready"
 
 log "Configuring Nextcloud ONLYOFFICE app"
-docker exec --user www-data nc-app php occ app:install onlyoffice >/dev/null 2>&1 || true
-docker exec --user www-data nc-app php occ app:enable onlyoffice >/dev/null 2>&1 || true
-docker exec --user www-data nc-app php occ app:disable richdocuments >/dev/null 2>&1 || true
+occ_exec app:install onlyoffice >/dev/null 2>&1 || true
+occ_exec app:enable onlyoffice >/dev/null 2>&1 || true
+occ_exec app:disable richdocuments >/dev/null 2>&1 || true
 
-docker exec --user www-data nc-app php occ config:app:set onlyoffice DocumentServerUrl --value="https://${APP_DOMAIN}/editor/" >/dev/null
-docker exec --user www-data nc-app php occ config:app:set onlyoffice DocumentServerInternalUrl --value="http://nc-onlyoffice/" >/dev/null
-docker exec --user www-data nc-app php occ config:app:set onlyoffice StorageUrl --value="https://${APP_DOMAIN}/" >/dev/null
-docker exec --user www-data nc-app php occ config:app:set onlyoffice jwt_secret --value="${ONLYOFFICE_JWT_SECRET}" >/dev/null
-docker exec --user www-data nc-app php occ config:app:set files_sharing shareapi_allow_share_dialog_user_enumeration --value=no >/dev/null
+occ_exec config:app:set onlyoffice DocumentServerUrl --value="https://${APP_DOMAIN}/editor/" >/dev/null
+occ_exec config:app:set onlyoffice DocumentServerInternalUrl --value="http://nc-onlyoffice/" >/dev/null
+occ_exec config:app:set onlyoffice StorageUrl --value="https://${APP_DOMAIN}/" >/dev/null
+occ_exec config:app:set onlyoffice jwt_secret --value="${ONLYOFFICE_JWT_SECRET}" >/dev/null
+occ_exec config:app:set files_sharing shareapi_allow_share_dialog_user_enumeration --value=no >/dev/null
 if [[ "$SHOW_CONTACTS" == true ]]; then
-  docker exec --user www-data nc-app php occ app:enable contactsinteraction >/dev/null 2>&1 || true
+  occ_exec app:enable contactsinteraction >/dev/null 2>&1 || true
 else
-  docker exec --user www-data nc-app php occ app:disable contactsinteraction >/dev/null 2>&1 || true
+  occ_exec app:disable contactsinteraction >/dev/null 2>&1 || true
 fi
 
-docker exec --user www-data nc-app php occ config:system:set trusted_domains 0 --value="${APP_DOMAIN}" >/dev/null
-docker exec --user www-data nc-app php occ config:system:set defaultapp --value="files" >/dev/null
+occ_exec config:system:set trusted_domains 0 --value="${APP_DOMAIN}" >/dev/null
+occ_exec config:system:set defaultapp --value="files" >/dev/null
 
 auth_ip=$(hostname -I | awk '{print $1}')
-[[ -n "$auth_ip" ]] && docker exec --user www-data nc-app php occ config:system:set trusted_proxies 0 --value="$auth_ip" >/dev/null || true
+[[ -n "$auth_ip" ]] && occ_exec config:system:set trusted_proxies 0 --value="$auth_ip" >/dev/null || true
+
+if [[ -n "$EMAIL_USER" ]]; then
+  smtp_port="${EMAIL_PORT:-587}"
+  [[ "$smtp_port" =~ ^[0-9]+$ ]] || smtp_port=587
+
+  smtp_secure="tls"
+  if [[ "$smtp_port" == "465" ]]; then
+    smtp_secure="ssl"
+  elif [[ "$smtp_port" == "25" ]]; then
+    smtp_secure=""
+  fi
+
+  if [[ "$EMAIL_USER" == *"@"* ]]; then
+    nc_mail_from="${EMAIL_USER%@*}"
+    nc_mail_domain="${EMAIL_USER#*@}"
+  else
+    nc_mail_from="$EMAIL_USER"
+    nc_mail_domain="$APP_DOMAIN"
+  fi
+
+  log "Configuring Nextcloud SMTP (${EMAIL_HOST}:${smtp_port}, from ${nc_mail_from}@${nc_mail_domain})"
+  occ_exec config:system:set mail_smtpmode --value="smtp" >/dev/null
+  occ_exec config:system:set mail_sendmailmode --value="smtp" >/dev/null
+  occ_exec config:system:set mail_from_address --value="${nc_mail_from}" >/dev/null
+  occ_exec config:system:set mail_domain --value="${nc_mail_domain}" >/dev/null
+  occ_exec config:system:set mail_smtphost --value="${EMAIL_HOST}" >/dev/null
+  occ_exec config:system:set mail_smtpport --value="${smtp_port}" >/dev/null
+  occ_exec config:system:set mail_smtpname --value="${EMAIL_USER}" >/dev/null
+  occ_exec config:system:set mail_smtppassword --value="${EMAIL_PASSWORD}" >/dev/null
+  occ_exec config:system:set mail_smtpauthtype --value="LOGIN" >/dev/null
+  occ_exec config:system:set mail_smtpauth --type=boolean --value=true >/dev/null
+  occ_exec config:system:set mail_smtpsecure --value="${smtp_secure}" >/dev/null
+else
+  warn "EMAIL_USER is empty; Nextcloud SMTP configuration skipped"
+fi
 
 log "Configuring Nextcloud OIDC with Keycloak (${KEYCLOAK_URL}/realms/${KEYCLOAK_REALM})"
 if [[ "$KEYCLOAK_MODE" == "existing" && -z "$KEYCLOAK_ADMIN_PASSWORD" && -f /opt/grist-sso/.env ]]; then
@@ -528,9 +589,8 @@ KC_CLIENT_SECRET_RESPONSE=$(keycloak_request GET "${KEYCLOAK_ADMIN_API_URL}/admi
 KC_CLIENT_SECRET=$(printf '%s' "$KC_CLIENT_SECRET_RESPONSE" | jq -r '.value // empty')
 [[ -n "$KC_CLIENT_SECRET" ]] || fail "Could not obtain nextcloud client secret from Keycloak"
 
-docker exec --user www-data nc-app php occ app:install user_oidc >/dev/null 2>&1 || true
-docker exec --user www-data nc-app php occ app:enable user_oidc >/dev/null 2>&1 || true
-docker exec --user www-data nc-app php occ user_oidc:provider keycloak-ssa \
+ensure_nextcloud_oidc_app
+occ_exec user_oidc:provider keycloak-ssa \
   --clientid="${KC_CLIENT_ID}" \
   --clientsecret="${KC_CLIENT_SECRET}" \
   --discoveryuri="${KEYCLOAK_URL}/realms/${KEYCLOAK_REALM}/.well-known/openid-configuration" \
@@ -543,8 +603,8 @@ docker exec --user www-data nc-app php occ user_oidc:provider keycloak-ssa \
   --check-bearer=1 \
   --bearer-provisioning=1 \
   --send-id-token-hint=1 >/dev/null
-docker exec --user www-data nc-app php occ config:app:set user_oidc allow_multiple_user_backends --value=0 >/dev/null
-docker exec --user www-data nc-app php occ config:system:set hide_login_form --type=boolean --value=true >/dev/null
+occ_exec config:app:set user_oidc allow_multiple_user_backends --value=0 >/dev/null
+occ_exec config:system:set hide_login_form --type=boolean --value=true >/dev/null
 success "Nextcloud OIDC provider configured (keycloak-ssa)"
 
 if [[ "$SETUP_NGINX" == true ]]; then

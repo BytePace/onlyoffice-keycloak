@@ -13,6 +13,7 @@ USER_PASSWORD=""
 FIRST_NAME="Smoke"
 LAST_NAME="Test"
 DEFAULT_SMOKE_PASSWORD="SmokePass123!"
+INSECURE=false
 
 log() { echo "[smoke-user] $*"; }
 fail() { echo "[smoke-user] ERROR: $*" >&2; exit 1; }
@@ -32,6 +33,7 @@ Options:
   --password <password>              Optional for create; generated if omitted
   --first-name <name>                Default: Smoke
   --last-name <name>                 Default: Test
+  --insecure                         Pass -k to curl for local TLS troubleshooting
 EOF
 }
 
@@ -58,6 +60,7 @@ while [[ $# -gt 0 ]]; do
     --password) USER_PASSWORD="$2"; shift 2 ;;
     --first-name) FIRST_NAME="$2"; shift 2 ;;
     --last-name) LAST_NAME="$2"; shift 2 ;;
+    --insecure) INSECURE=true; shift ;;
     *)
       usage
       fail "Unknown option: $1"
@@ -74,30 +77,35 @@ else
   [[ -n "$USER_EMAIL" ]] || fail "--email is required for delete"
 fi
 
-TOKEN_RESPONSE=$(curl -fsS -X POST "${KEYCLOAK_URL}/realms/master/protocol/openid-connect/token" \
+CURL_ARGS=(-fsS)
+if [[ "$INSECURE" == "true" ]]; then
+  CURL_ARGS+=(-k)
+fi
+
+TOKEN_RESPONSE=$(curl "${CURL_ARGS[@]}" -X POST "${KEYCLOAK_URL}/realms/master/protocol/openid-connect/token" \
   -H "Content-Type: application/x-www-form-urlencoded" \
   --data-urlencode "client_id=admin-cli" \
   --data-urlencode "grant_type=password" \
   --data-urlencode "username=${KEYCLOAK_ADMIN_USER}" \
-  --data-urlencode "password=${KEYCLOAK_ADMIN_PASSWORD}") || fail "Failed to obtain admin token"
+  --data-urlencode "password=${KEYCLOAK_ADMIN_PASSWORD}") || fail "Failed to obtain admin token${INSECURE:+ even with --insecure}"
 
 TOKEN=$(printf '%s' "$TOKEN_RESPONSE" | jq -r '.access_token // empty')
 [[ -n "$TOKEN" ]] || fail "Admin token is empty"
 
 kc_get() {
-  curl -fsS -H "Authorization: Bearer ${TOKEN}" "$@"
+  curl "${CURL_ARGS[@]}" -H "Authorization: Bearer ${TOKEN}" "$@"
 }
 
 kc_post() {
-  curl -fsS -H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json" -X POST "$@"
+  curl "${CURL_ARGS[@]}" -H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json" -X POST "$@"
 }
 
 kc_put() {
-  curl -fsS -H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json" -X PUT "$@"
+  curl "${CURL_ARGS[@]}" -H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json" -X PUT "$@"
 }
 
 kc_delete() {
-  curl -fsS -H "Authorization: Bearer ${TOKEN}" -X DELETE "$@"
+  curl "${CURL_ARGS[@]}" -H "Authorization: Bearer ${TOKEN}" -X DELETE "$@"
 }
 
 USER_LOOKUP=$(kc_get "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/users?username=${USER_EMAIL}")
