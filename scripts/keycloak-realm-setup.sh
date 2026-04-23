@@ -241,6 +241,27 @@ else
     log "Audience mapper added."
 fi
 
+existing_nextcloud_mapper=$(kc_get "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${MOBILE_INTERNAL_ID}/protocol-mappers/models" \
+    | jq -r '.[] | select(.name=="nextcloud-audience") | .id // empty')
+
+if [[ -n "$existing_nextcloud_mapper" ]]; then
+    log "Nextcloud audience mapper already exists — skipping."
+else
+    log "Adding Nextcloud audience mapper to onlyoffice-mobile ..."
+    kc_post "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${MOBILE_INTERNAL_ID}/protocol-mappers/models" -d '{
+      "name": "nextcloud-audience",
+      "protocol": "openid-connect",
+      "protocolMapper": "oidc-audience-mapper",
+      "consentRequired": false,
+      "config": {
+        "included.client.audience": "nextcloud",
+        "access.token.claim": "true",
+        "id.token.claim": "false"
+      }
+    }'
+    log "Nextcloud audience mapper added."
+fi
+
 # ── Create test user (for development/testing) ────────────────────────────────
 TEST_USER_EMAIL="ruslan.musagitov@gmail.com"
 TEST_USER_PASSWORD="qwertyu1"

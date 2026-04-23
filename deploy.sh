@@ -670,6 +670,15 @@ if [[ -z "$OO_MAPPER_EXISTS" ]]; then
     -d '{"name":"onlyoffice-audience","protocol":"openid-connect","protocolMapper":"oidc-audience-mapper","consentRequired":false,"config":{"included.client.audience":"onlyoffice-client","access.token.claim":"true","id.token.claim":"false"}}' >/dev/null
 fi
 
+OO_NEXTCLOUD_MAPPER_EXISTS=$(keycloak_request GET "${KEYCLOAK_ADMIN_API_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${OO_MOBILE_UUID}/protocol-mappers/models" \
+  -H "Authorization: Bearer ${KC_TOKEN}" | jq -r '.[] | select(.name=="nextcloud-audience") | .id // empty' || true)
+if [[ -z "$OO_NEXTCLOUD_MAPPER_EXISTS" ]]; then
+  keycloak_request POST "${KEYCLOAK_ADMIN_API_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${OO_MOBILE_UUID}/protocol-mappers/models" \
+    -H "Authorization: Bearer ${KC_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d '{"name":"nextcloud-audience","protocol":"openid-connect","protocolMapper":"oidc-audience-mapper","consentRequired":false,"config":{"included.client.audience":"nextcloud","access.token.claim":"true","id.token.claim":"false"}}' >/dev/null
+fi
+
 if grep -q '^OO_CLIENT_SECRET=' "$ENV_FILE"; then
   sed -i "s|^OO_CLIENT_SECRET=.*|OO_CLIENT_SECRET=${OO_CLIENT_SECRET}|" "$ENV_FILE"
 else
