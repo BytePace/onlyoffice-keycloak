@@ -48,7 +48,9 @@ def _json_meta(response: httpx.Response) -> dict:
     payload = response.json()
     meta = payload.get("ocs", {}).get("meta", {})
     status_code = int(meta.get("statuscode", 999))
-    if status_code != 100:
+    # Nextcloud OCS APIs typically return 100 for success, but some installations
+    # report 200 with status="ok" for successful calls as well.
+    if status_code not in (100, 200):
         message = meta.get("message") or "OCS request failed"
         raise httpx.HTTPStatusError(message, request=response.request, response=response)
     return payload.get("ocs", {}).get("data") or {}
