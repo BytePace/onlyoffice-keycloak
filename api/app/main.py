@@ -2,17 +2,19 @@ import os
 import secrets
 import base64
 import hashlib
+import tempfile
+from pathlib import Path
 from urllib.parse import quote, urlencode
 
 import httpx
 from fastapi import Depends, HTTPException, Request, Cookie
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi import FastAPI
 
 from .auth import get_current_user, _fetch_jwks, KEYCLOAK_ISSUER_EXTERNAL
 from .models import AddRecordsRequest, CreateDocRequest, CreateTablesRequest, ShareDocRequest
 from jose import jwt
-from . import onlyoffice, spreadsheet, storage
+from . import nextcloud, onlyoffice, spreadsheet, storage
 
 app = FastAPI(title="OnlyOffice Spreadsheet API", version="1.0.0")
 
@@ -40,6 +42,50 @@ def _require_doc_access(meta: dict | None, user: dict, write: bool = False) -> s
     if not has_access:
         raise HTTPException(status_code=403, detail="Access denied")
     return email
+
+
+def _doc_nextcloud_path(meta: dict | None) -> str:
+    return ((meta or {}).get("nextcloud_path") or "").strip()
+
+
+def _request_access_token(
+    request: Request,
+    query_token: str | None = None,
+) -> str:
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:].strip()
+        if token:
+            return token
+    cookie_token = (request.cookies.get("access_token") or "").strip()
+    if cookie_token:
+        return cookie_token
+    query_value = (query_token or "").strip()
+    if query_value:
+        return query_value
+    raise HTTPException(status_code=401, detail="Access token is required")
+
+
+async def _with_doc_workbook(doc_id: str, access_token: str, handler, upload: bool) -> object:
+    meta = storage.get_document_meta(doc_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    nextcloud_path = _doc_nextcloud_path(meta)
+    if not nextcloud_path:
+        raise HTTPException(status_code=404, detail="Document storage path is missing")
+    lock = storage.get_doc_lock(doc_id)
+    with lock:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_path = Path(tmpdir) / f"{doc_id}.xlsx"
+            local_path.write_bytes(await nextcloud.download_bytes(nextcloud_path, access_token))
+
+            result = handler(local_path)
+
+            if upload:
+                await nextcloud.upload_bytes(nextcloud_path, local_path.read_bytes(), access_token)
+
+            return result
 
 
 # ── Custom exception handler for 401/403 on editor endpoints ──────────────────
@@ -554,9 +600,14 @@ async def list_workspaces(org_id: str, user: dict = Depends(get_current_user)):
 async def create_doc(
     workspace_id: int,
     req: CreateDocRequest,
+    request: Request,
     user: dict = Depends(get_current_user),
 ):
-    doc = storage.create_document(req.name, _user_email(user))
+    owner_email = _user_email(user)
+    access_token = _request_access_token(request)
+    nextcloud_path = await nextcloud.reserve_document_path(req.name, access_token)
+    await nextcloud.create_empty_workbook(nextcloud_path, access_token)
+    doc = storage.create_document(nextcloud.title_from_relative_path(nextcloud_path), owner_email, nextcloud_path)
     return doc["id"]
 
 
@@ -564,6 +615,7 @@ async def create_doc(
 async def share_doc(
     doc_id: str,
     req: ShareDocRequest,
+    request: Request,
     user: dict = Depends(get_current_user),
 ):
     meta = storage.get_document_meta(doc_id)
@@ -575,6 +627,9 @@ async def share_doc(
         raise HTTPException(status_code=403, detail="Only owner can share document")
 
     try:
+        nextcloud_path = _doc_nextcloud_path(meta)
+        access_token = _request_access_token(request)
+        await nextcloud.create_user_share(nextcloud_path, req.email, role=req.role, access_token=access_token)
         updated = storage.share_document(doc_id, req.email, req.role)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -600,6 +655,7 @@ async def get_doc_shares(
 async def revoke_doc_share(
     doc_id: str,
     email: str,
+    request: Request,
     user: dict = Depends(get_current_user),
 ):
     meta = storage.get_document_meta(doc_id)
@@ -608,6 +664,9 @@ async def revoke_doc_share(
     role = storage.get_doc_role(meta, _user_email(user))
     if role != "owner":
         raise HTTPException(status_code=403, detail="Only owner can revoke access")
+    nextcloud_path = _doc_nextcloud_path(meta)
+    access_token = _request_access_token(request)
+    await nextcloud.revoke_user_share(nextcloud_path, email, access_token)
     updated = storage.revoke_share(doc_id, email)
     return {"doc_id": doc_id, "shared_with": updated.get("shared_with", {})}
 
@@ -616,14 +675,16 @@ async def revoke_doc_share(
 async def create_tables(
     doc_id: str,
     req: CreateTablesRequest,
+    request: Request,
     user: dict = Depends(get_current_user),
 ):
     meta = storage.get_document_meta(doc_id)
     _require_doc_access(meta, user, write=True)
-
-    xlsx_path = storage.get_xlsx_path(doc_id)
-    for table in req.tables:
-        spreadsheet.init_sheet(xlsx_path, table.id, [c.id for c in table.columns])
+    access_token = _request_access_token(request)
+    def init_tables(local_path: Path) -> None:
+        for table in req.tables:
+            spreadsheet.init_sheet(local_path, table.id, [c.id for c in table.columns])
+    await _with_doc_workbook(doc_id, access_token, init_tables, upload=True)
 
     return {}
 
@@ -635,16 +696,19 @@ async def add_records(
     doc_id: str,
     table_id: str,
     req: AddRecordsRequest,
+    request: Request,
     user: dict = Depends(get_current_user),
 ):
     meta = storage.get_document_meta(doc_id)
     _require_doc_access(meta, user, write=True)
-
-    spreadsheet.append_rows(
-        storage.get_xlsx_path(doc_id),
-        table_id,
-        [r.fields for r in req.records],
-    )
+    access_token = _request_access_token(request)
+    def append(local_path: Path) -> None:
+        spreadsheet.append_rows(
+            local_path,
+            table_id,
+            [r.fields for r in req.records],
+        )
+    await _with_doc_workbook(doc_id, access_token, append, upload=True)
     return {}
 
 
@@ -652,12 +716,18 @@ async def add_records(
 async def get_records(
     doc_id: str,
     table_id: str,
+    request: Request,
     user: dict = Depends(get_current_user),
 ):
     meta = storage.get_document_meta(doc_id)
     _require_doc_access(meta, user, write=False)
-
-    rows = spreadsheet.get_rows(storage.get_xlsx_path(doc_id), table_id)
+    access_token = _request_access_token(request)
+    rows = await _with_doc_workbook(
+        doc_id,
+        access_token,
+        lambda local_path: spreadsheet.get_rows(local_path, table_id),
+        upload=False,
+    )
     return {"records": [{"fields": r} for r in rows]}
 
 
@@ -703,39 +773,44 @@ async def open_document(doc_id: str, request: Request):
 
 
 @app.get("/docs/{doc_id}/editor", response_class=HTMLResponse)
-async def get_editor(doc_id: str, user: dict = Depends(get_current_user)):
+async def get_editor(doc_id: str, request: Request, user: dict = Depends(get_current_user)):
     meta = storage.get_document_meta(doc_id)
     _require_doc_access(meta, user, write=False)
 
     user_email = user.get("email") or user.get("sub", "user")
+    access_token = _request_access_token(request)
+    encoded_token = quote(access_token, safe="")
     config = onlyoffice.build_editor_config(
         doc_id=doc_id,
         title=meta["title"],
         user_email=user_email,
-        file_url=f"{API_EXTERNAL_URL}/docs/{doc_id}/file.xlsx",
-        callback_url=f"{API_EXTERNAL_URL}/docs/{doc_id}/callback",
+        file_url=f"{API_EXTERNAL_URL}/docs/{doc_id}/file.xlsx?access_token={encoded_token}",
+        callback_url=f"{API_EXTERNAL_URL}/docs/{doc_id}/callback?access_token={encoded_token}",
     )
     return HTMLResponse(content=onlyoffice.render_editor_html(config))
 
 
 @app.get("/docs/{doc_id}/file.xlsx")
-async def get_file(doc_id: str):
+async def get_file(doc_id: str, request: Request, access_token: str = ""):
     """Called by OnlyOffice Document Server to fetch the file — no user auth."""
     meta = storage.get_document_meta(doc_id)
     if not meta:
         raise HTTPException(status_code=404, detail="Document not found")
-    xlsx_path = storage.ensure_xlsx_exists(doc_id)
-    if not xlsx_path.exists():
-        raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(
-        xlsx_path,
+    nextcloud_path = _doc_nextcloud_path(meta)
+    if not nextcloud_path:
+        raise HTTPException(status_code=404, detail="Document storage path is missing")
+    token = _request_access_token(request, access_token)
+    content = await nextcloud.download_bytes(nextcloud_path, token)
+    filename = nextcloud.file_name_from_relative_path(nextcloud_path)
+    return Response(
+        content=content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        filename=f"{doc_id}.xlsx",
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
     )
 
 
 @app.post("/docs/{doc_id}/callback")
-async def onlyoffice_callback(doc_id: str, body: dict):
+async def onlyoffice_callback(doc_id: str, request: Request, body: dict, access_token: str = ""):
     """
     OnlyOffice save callback.
     status=2 → document ready; download from body['url'] and persist.
@@ -747,6 +822,10 @@ async def onlyoffice_callback(doc_id: str, body: dict):
             async with httpx.AsyncClient() as client:
                 resp = await client.get(download_url, timeout=30)
                 resp.raise_for_status()
-            xlsx_path = storage.get_xlsx_path(doc_id)
-            xlsx_path.write_bytes(resp.content)
+            meta = storage.get_document_meta(doc_id)
+            nextcloud_path = _doc_nextcloud_path(meta)
+            if not nextcloud_path:
+                raise HTTPException(status_code=404, detail="Document storage path is missing")
+            token = _request_access_token(request, access_token)
+            await nextcloud.upload_bytes(nextcloud_path, resp.content, token)
     return {"error": 0}

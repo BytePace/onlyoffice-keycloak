@@ -55,17 +55,7 @@ rm -f \
   /etc/nginx/sites-enabled/nextcloud-temp.conf \
   /etc/nginx/sites-available/nextcloud-temp.conf
 
-log "Removing Let's Encrypt certificates"
-certbot delete --cert-name sheets.bytepace.com --non-interactive 2>/dev/null || true
-certbot delete --cert-name auth.bytepace.com --non-interactive 2>/dev/null || true
-
-rm -rf /etc/letsencrypt/live/sheets.bytepace.com
-rm -rf /etc/letsencrypt/archive/sheets.bytepace.com
-rm -rf /etc/letsencrypt/renewal/sheets.bytepace.com.conf
-
-rm -rf /etc/letsencrypt/live/auth.bytepace.com
-rm -rf /etc/letsencrypt/archive/auth.bytepace.com
-rm -rf /etc/letsencrypt/renewal/auth.bytepace.com.conf
+log "Keeping Let's Encrypt certificates to avoid rate-limit lockouts"
 
 log "Reloading nginx if config is still valid"
 nginx -t >/dev/null 2>&1 && systemctl reload nginx || true

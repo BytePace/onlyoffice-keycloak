@@ -1,12 +1,13 @@
 import json
 import os
 import uuid
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
-import openpyxl
-
 DATA_DIR = Path(os.getenv("DATA_DIR", "/data"))
+_doc_locks: dict[str, threading.Lock] = {}
+_locks_mutex = threading.Lock()
 
 
 def _docs_dir() -> Path:
@@ -18,21 +19,11 @@ def _docs_dir() -> Path:
 def _meta_path(doc_id: str) -> Path:
     return _docs_dir() / f"{doc_id}.meta.json"
 
-
-def get_xlsx_path(doc_id: str) -> Path:
-    return _docs_dir() / f"{doc_id}.xlsx"
-
-
-def ensure_xlsx_exists(doc_id: str) -> Path:
-    """
-    Make sure document has a physical .xlsx file for OnlyOffice download.
-    Some docs may exist as metadata-only (created before first table write).
-    """
-    xlsx_path = get_xlsx_path(doc_id)
-    if not xlsx_path.exists():
-        wb = openpyxl.Workbook()
-        wb.save(xlsx_path)
-    return xlsx_path
+def get_doc_lock(doc_id: str) -> threading.Lock:
+    with _locks_mutex:
+        if doc_id not in _doc_locks:
+            _doc_locks[doc_id] = threading.Lock()
+        return _doc_locks[doc_id]
 
 
 def list_documents() -> list[dict]:
@@ -53,15 +44,10 @@ def _normalize_email(email: str) -> str:
 def get_doc_role(meta: dict, user_email: str) -> str | None:
     """
     Returns one of: owner/editor/viewer or None if no access.
-    Legacy docs without owner are treated as owner-level accessible to keep backward compatibility.
     """
     email = _normalize_email(user_email)
     owner = _normalize_email(meta.get("owner_email", ""))
-    if owner:
-        if email == owner:
-            return "owner"
-    else:
-        # Legacy metadata created before ACL support
+    if owner and email == owner:
         return "owner"
 
     shared_with = meta.get("shared_with") or {}
@@ -83,7 +69,7 @@ def list_documents_for_user(user_email: str) -> list[dict]:
     return [d for d in list_documents() if can_read(d, user_email)]
 
 
-def create_document(title: str, owner_email: str) -> dict:
+def create_document(title: str, owner_email: str, nextcloud_path: str) -> dict:
     doc_id = str(uuid.uuid4())
     meta = {
         "id": doc_id,
@@ -91,10 +77,10 @@ def create_document(title: str, owner_email: str) -> dict:
         "created_at": datetime.now(timezone.utc).isoformat(),
         "owner_email": _normalize_email(owner_email),
         "shared_with": {},
+        "nextcloud_path": nextcloud_path,
     }
     with open(_meta_path(doc_id), "w") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
-    ensure_xlsx_exists(doc_id)
     return meta
 
 

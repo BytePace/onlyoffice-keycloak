@@ -354,6 +354,8 @@ services:
       ONLYOFFICE_JWT_SECRET: ${ONLYOFFICE_JWT_SECRET}
       ONLYOFFICE_DOCS_EXTERNAL_URL: https://${APP_DOMAIN}/editor
       API_EXTERNAL_URL: https://${APP_DOMAIN}/api
+      NEXTCLOUD_BASE_URL: https://${APP_DOMAIN}
+      NEXTCLOUD_FILES_DIR: SSA Forms
       DATA_DIR: /data
     volumes:
       - nc-api-data:/data
