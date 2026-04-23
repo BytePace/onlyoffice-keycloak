@@ -141,8 +141,9 @@ async def download_bytes(relative_path: str, access_token: str) -> bytes:
 
 async def create_empty_workbook(relative_path: str, access_token: str) -> None:
     workbook = openpyxl.Workbook()
-    if "Sheet" in workbook.sheetnames:
-        del workbook["Sheet"]
+    # Keep at least one visible sheet, otherwise openpyxl cannot save workbook.
+    worksheet = workbook.active
+    worksheet.title = "Sheet1"
     with tempfile.NamedTemporaryFile(suffix=".xlsx") as tmp:
         workbook.save(tmp.name)
         tmp.seek(0)
