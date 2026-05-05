@@ -671,6 +671,24 @@ async def revoke_doc_share(
     return {"doc_id": doc_id, "shared_with": updated.get("shared_with", {})}
 
 
+@app.get("/docs/{doc_id}/tables")
+async def list_tables(
+    doc_id: str,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    meta = storage.get_document_meta(doc_id)
+    _require_doc_access(meta, user, write=False)
+    access_token = _request_access_token(request)
+    table_names = await _with_doc_workbook(
+        doc_id,
+        access_token,
+        lambda local_path: spreadsheet.list_sheets(local_path),
+        upload=False,
+    )
+    return {"tables": [{"id": name, "columns": []} for name in table_names]}
+
+
 @app.post("/docs/{doc_id}/tables")
 async def create_tables(
     doc_id: str,
