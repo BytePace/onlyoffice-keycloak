@@ -8,6 +8,8 @@ KEYCLOAK_MODE="${KEYCLOAK_MODE:-existing}"
 KEYCLOAK_URL="${KEYCLOAK_URL:-}"
 AUTH_DOMAIN="${AUTH_DOMAIN:-}"
 KEYCLOAK_REALM="${KEYCLOAK_REALM:-ssa}"
+API_PORT="${API_PORT:-8088}"
+OO_PORT="${OO_PORT:-8092}"
 
 PASS=0; FAIL=0; WARN=0
 
@@ -57,16 +59,16 @@ check_dns "$APP_DOMAIN"
 # Docker containers
 echo ""
 echo "▶ Docker Containers"
-check_container "oo-sso-api"
-check_container "oo-sso-onlyoffice"
-[[ "$KEYCLOAK_MODE" == "new" ]] && check_container "oo-sso-keycloak"
-[[ "$KEYCLOAK_MODE" == "new" ]] && check_container "oo-sso-postgres"
+check_container "nc-api"
+check_container "nc-onlyoffice"
+[[ "$KEYCLOAK_MODE" == "new" ]] && check_container "nc-keycloak"
+[[ "$KEYCLOAK_MODE" == "new" ]] && check_container "nc-postgres-keycloak"
 
 # Local endpoints (localhost)
 echo ""
 echo "▶ Local Endpoints (127.0.0.1)"
-check_url "API (localhost)"     "http://127.0.0.1:8000/health"
-check_url "OnlyOffice (localhost)" "http://127.0.0.1:8091/healthcheck"
+check_url "API (localhost)"     "http://127.0.0.1:${API_PORT}/health"
+check_url "OnlyOffice (localhost)" "http://127.0.0.1:${OO_PORT}/healthcheck"
 
 # Domain endpoints (HTTP)
 echo ""
@@ -102,14 +104,14 @@ fi
 echo ""
 echo "▶ Container Logs (last 5 lines)"
 echo "  API Container:"
-docker logs --tail 5 oo-sso-api 2>/dev/null | sed 's/^/    /' || echo "    (no logs)"
+docker logs --tail 5 nc-api 2>/dev/null | sed 's/^/    /' || echo "    (no logs)"
 echo "  OnlyOffice Container:"
-docker logs --tail 5 oo-sso-onlyoffice 2>/dev/null | sed 's/^/    /' || echo "    (no logs)"
+docker logs --tail 5 nc-onlyoffice 2>/dev/null | sed 's/^/    /' || echo "    (no logs)"
 
 # nginx configuration
 echo ""
 echo "▶ Nginx Configuration"
-if [[ -f "/etc/nginx/sites-available/onlyoffice-sso.conf" ]]; then
+if [[ -f "/etc/nginx/sites-available/nextcloud-onlyoffice.conf" ]]; then
     ok "Nginx config exists"
     if nginx -t 2>&1 | grep -q "successful"; then
         ok "Nginx config is valid"
@@ -123,8 +125,8 @@ fi
 
 # Environment variables
 echo ""
-echo "▶ Environment Variables (oo-sso-api)"
-docker exec oo-sso-api env 2>/dev/null | grep -E "KEYCLOAK|ONLYOFFICE|API" | sed 's/^/  /' || warn "Could not read env vars"
+echo "▶ Environment Variables (nc-api)"
+docker exec nc-api env 2>/dev/null | grep -E "KEYCLOAK|ONLYOFFICE|API" | sed 's/^/  /' || warn "Could not read env vars"
 
 # Summary
 echo ""

@@ -44,7 +44,9 @@ def build_editor_config(
     }
 
     if ONLYOFFICE_JWT_SECRET:
-        token = jwt.encode({"payload": config}, ONLYOFFICE_JWT_SECRET, algorithm="HS256")
+        # OnlyOffice expects editor config claims at top level (document/editorConfig),
+        # not wrapped in a nested "payload" object.
+        token = jwt.encode(config, ONLYOFFICE_JWT_SECRET, algorithm="HS256")
         config["token"] = token
 
     return config

@@ -13,6 +13,11 @@ class CreateDocRequest(BaseModel):
     name: str
 
 
+class ShareDocRequest(BaseModel):
+    email: str
+    role: str = "viewer"  # viewer | editor
+
+
 class TableColumn(BaseModel):
     id: str
     type: str = "Text"

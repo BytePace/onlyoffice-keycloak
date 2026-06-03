@@ -63,7 +63,7 @@ if [[ -z "$CLIENT_SECRET" ]]; then
     fail "CLIENT_SECRET is required.
 
 Get it from VPS:
-  ssh openclaw@49.13.194.13 'sudo cat /opt/onlyoffice-sso/deploy-credentials.txt'
+  ssh <user@host> 'sudo awk -F\": \" \"/^OnlyOffice client secret:/ {print \\$2}\" /opt/nextcloud-onlyoffice/credentials.txt'
 
 Usage:
   bash $0 \\
