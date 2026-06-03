@@ -485,8 +485,15 @@ else
   occ_exec app:disable contactsinteraction >/dev/null 2>&1 || true
 fi
 
+log "Disabling non-essential Nextcloud apps"
+for nc_app in comments firstrunwizard photos recommendations nextcloud_announcements support weather_status federation; do
+  occ_exec app:disable "$nc_app" >/dev/null 2>&1 || true
+done
+
 occ_exec config:system:set trusted_domains 0 --value="${APP_DOMAIN}" >/dev/null
 occ_exec config:system:set defaultapp --value="files" >/dev/null
+occ_exec config:system:set skeletondirectory --value="" >/dev/null
+occ_exec config:system:set templatedirectory --value="" >/dev/null
 
 auth_ip=$(hostname -I | awk '{print $1}')
 [[ -n "$auth_ip" ]] && occ_exec config:system:set trusted_proxies 0 --value="$auth_ip" >/dev/null || true
