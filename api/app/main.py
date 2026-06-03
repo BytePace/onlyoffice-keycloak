@@ -23,11 +23,31 @@ KEYCLOAK_ISSUER = os.getenv("KEYCLOAK_ISSUER_EXTERNAL", "")
 CLIENT_ID = "onlyoffice-client"
 CLIENT_SECRET = os.getenv("OO_CLIENT_SECRET", "")
 
+# Scoped to /api so JWT/session cookies are not sent to Nextcloud (/) on the same host.
+API_COOKIE_PATH = "/api"
+
+_API_COOKIE_NAMES = (
+    "access_token",
+    "id_token",
+    "pkce_verifier",
+    "oauth_state",
+    "oauth_doc_id",
+    "oauth_redirect_to",
+)
+
+
 def _cookie_secure(request: Request) -> bool:
     """Respect reverse-proxy scheme; secure cookies only on HTTPS."""
     xf_proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
     scheme = xf_proto or request.url.scheme
     return scheme == "https"
+
+
+def _clear_api_cookies(response: Response) -> None:
+    """Remove API auth cookies (current path and legacy path=/)."""
+    for name in _API_COOKIE_NAMES:
+        response.delete_cookie(name, path=API_COOKIE_PATH)
+        response.delete_cookie(name, path="/")
 
 
 def _user_email(user: dict) -> str:
@@ -358,13 +378,15 @@ async def oauth_login(request: Request, doc_id: str = "", redirect_to: str = "")
 
     secure_cookie = _cookie_secure(request)
     response = RedirectResponse(url=auth_url)
+    _clear_api_cookies(response)
     response.set_cookie(
         "pkce_verifier",
         code_verifier,
         max_age=600,
         httponly=True,
         secure=secure_cookie,
-        samesite="lax"
+        samesite="lax",
+        path=API_COOKIE_PATH,
     )
     response.set_cookie(
         "oauth_state",
@@ -372,7 +394,8 @@ async def oauth_login(request: Request, doc_id: str = "", redirect_to: str = "")
         max_age=600,
         httponly=True,
         secure=secure_cookie,
-        samesite="lax"
+        samesite="lax",
+        path=API_COOKIE_PATH,
     )
     if doc_id:
         response.set_cookie(
@@ -381,7 +404,8 @@ async def oauth_login(request: Request, doc_id: str = "", redirect_to: str = "")
             max_age=600,
             httponly=True,
             secure=secure_cookie,
-            samesite="lax"
+            samesite="lax",
+            path=API_COOKIE_PATH,
         )
     if redirect_to:
         response.set_cookie(
@@ -390,7 +414,8 @@ async def oauth_login(request: Request, doc_id: str = "", redirect_to: str = "")
             max_age=600,
             httponly=True,
             secure=secure_cookie,
-            samesite="lax"
+            samesite="lax",
+            path=API_COOKIE_PATH,
         )
 
     return response
@@ -448,13 +473,15 @@ async def oauth_callback(
 
         secure_cookie = _cookie_secure(request)
         response = RedirectResponse(url=redirect_url)
+        _clear_api_cookies(response)
         response.set_cookie(
             "access_token",
             access_token,
             max_age=3600,
             httponly=True,
             secure=secure_cookie,
-            samesite="lax"
+            samesite="lax",
+            path=API_COOKIE_PATH,
         )
         if id_token:
             response.set_cookie(
@@ -463,7 +490,8 @@ async def oauth_callback(
                 max_age=3600,
                 httponly=True,
                 secure=secure_cookie,
-                samesite="lax"
+                samesite="lax",
+                path=API_COOKIE_PATH,
             )
         return response
 
@@ -478,15 +506,7 @@ async def signed_out():
     Clears local cookies and returns user to the dashboard entrypoint.
     """
     response = RedirectResponse(url="/api/", status_code=302)
-    for name in [
-        "access_token",
-        "id_token",
-        "pkce_verifier",
-        "oauth_state",
-        "oauth_doc_id",
-        "oauth_redirect_to",
-    ]:
-        response.delete_cookie(name, path="/")
+    _clear_api_cookies(response)
     return response
 
 
