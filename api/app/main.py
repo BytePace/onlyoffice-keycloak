@@ -68,6 +68,19 @@ def _doc_nextcloud_path(meta: dict | None) -> str:
     return ((meta or {}).get("nextcloud_path") or "").strip()
 
 
+async def _browser_open_url(meta: dict, access_token: str) -> str:
+    """URL that opens the document in Nextcloud Files (same flow as the web UI)."""
+    file_id = (meta.get("nextcloud_file_id") or "").strip()
+    if not file_id:
+        nextcloud_path = _doc_nextcloud_path(meta)
+        if not nextcloud_path:
+            raise HTTPException(status_code=404, detail="Document storage path is missing")
+        file_id = await nextcloud.resolve_file_id(nextcloud_path, access_token)
+        meta["nextcloud_file_id"] = file_id
+        storage.save_document_meta(meta["id"], meta)
+    return nextcloud.browser_open_url(file_id)
+
+
 def _request_access_token(
     request: Request,
     query_token: str | None = None,
@@ -602,6 +615,14 @@ async def login_page(doc_id: str = ""):
 
 # ── Document list (Grist-compatible) ──────────────────────────────────────────
 
+def _doc_list_item(meta: dict) -> dict:
+    item = {"id": meta["id"], "name": meta["title"]}
+    file_id = (meta.get("nextcloud_file_id") or "").strip()
+    if file_id:
+        item["browser_url"] = nextcloud.browser_open_url(file_id)
+    return item
+
+
 @app.get("/orgs/{org_id}/workspaces")
 async def list_workspaces(org_id: str, user: dict = Depends(get_current_user)):
     docs = storage.list_documents_for_user(_user_email(user))
@@ -609,7 +630,7 @@ async def list_workspaces(org_id: str, user: dict = Depends(get_current_user)):
         {
             "id": 1,
             "name": "Default",
-            "docs": [{"id": d["id"], "name": d["title"]} for d in docs],
+            "docs": [_doc_list_item(d) for d in docs],
         }
     ]
 
@@ -627,7 +648,16 @@ async def create_doc(
     access_token = _request_access_token(request)
     nextcloud_path = await nextcloud.reserve_document_path(req.name, access_token)
     await nextcloud.create_empty_workbook(nextcloud_path, access_token)
-    doc = storage.create_document(nextcloud.title_from_relative_path(nextcloud_path), owner_email, nextcloud_path)
+    try:
+        file_id = await nextcloud.resolve_file_id(nextcloud_path, access_token)
+    except Exception:
+        file_id = ""
+    doc = storage.create_document(
+        nextcloud.title_from_relative_path(nextcloud_path),
+        owner_email,
+        nextcloud_path,
+        nextcloud_file_id=file_id,
+    )
     return doc["id"]
 
 
@@ -812,20 +842,21 @@ async def open_document(doc_id: str, request: Request):
 
 @app.get("/docs/{doc_id}/editor", response_class=HTMLResponse)
 async def get_editor(doc_id: str, request: Request, user: dict = Depends(get_current_user)):
+    """
+    Open the spreadsheet in the browser via Nextcloud Files + integrated OnlyOffice.
+    The legacy standalone editor (file.xlsx proxy) is not used here because Document
+    Server cannot reliably download from the public API URL.
+    """
     meta = storage.get_document_meta(doc_id)
     _require_doc_access(meta, user, write=False)
-
-    user_email = user.get("email") or user.get("sub", "user")
     access_token = _request_access_token(request)
-    encoded_token = quote(access_token, safe="")
-    config = onlyoffice.build_editor_config(
-        doc_id=doc_id,
-        title=meta["title"],
-        user_email=user_email,
-        file_url=f"{API_EXTERNAL_URL}/docs/{doc_id}/file.xlsx?access_token={encoded_token}",
-        callback_url=f"{API_EXTERNAL_URL}/docs/{doc_id}/callback?access_token={encoded_token}",
-    )
-    return HTMLResponse(content=onlyoffice.render_editor_html(config))
+    try:
+        url = await _browser_open_url(meta, access_token)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Could not open document in Nextcloud: {exc}")
+    return RedirectResponse(url=url, status_code=302)
 
 
 @app.get("/docs/{doc_id}/file.xlsx")
