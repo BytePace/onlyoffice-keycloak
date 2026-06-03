@@ -5,6 +5,19 @@ import tempfile
 from pathlib import Path
 from urllib.parse import quote
 
+_FILE_ID_PATTERN = re.compile(
+    r"<(?:oc|nc):fileid[^>]*>(\d+)</(?:oc|nc):fileid>",
+    re.IGNORECASE,
+)
+_PROPFIND_FILE_ID = """<?xml version="1.0"?>
+<d:propfind xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns" xmlns:nc="http://nextcloud.org/ns">
+  <d:prop>
+    <oc:fileid />
+    <nc:fileid />
+  </d:prop>
+</d:propfind>
+"""
+
 import httpx
 import openpyxl
 
@@ -217,3 +230,31 @@ def file_name_from_relative_path(relative_path: str) -> str:
 
 def title_from_relative_path(relative_path: str) -> str:
     return Path(relative_path).stem
+
+
+def browser_open_url(file_id: str) -> str:
+    """Nextcloud Files deep link that opens the spreadsheet in the integrated editor."""
+    dir_param = quote(f"/{NEXTCLOUD_FILES_DIR}", safe="/")
+    return f"{NEXTCLOUD_BASE_URL}/apps/files/files/{file_id}?dir={dir_param}&openfile=true"
+
+
+async def resolve_file_id(relative_path: str, access_token: str) -> str:
+    """Resolve Nextcloud numeric file id for a WebDAV path (used in Files app URLs)."""
+    user_id = await _current_user_id(access_token)
+    headers = {
+        **_auth_headers(access_token),
+        "Depth": "0",
+        "Content-Type": "application/xml",
+    }
+    async with httpx.AsyncClient(follow_redirects=True) as client:
+        response = await client.request(
+            "PROPFIND",
+            _webdav_url(relative_path, user_id),
+            content=_PROPFIND_FILE_ID,
+            headers=headers,
+        )
+        response.raise_for_status()
+    match = _FILE_ID_PATTERN.search(response.text)
+    if not match:
+        raise RuntimeError(f"Could not resolve Nextcloud file id for {relative_path}")
+    return match.group(1)

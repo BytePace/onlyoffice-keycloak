@@ -69,7 +69,12 @@ def list_documents_for_user(user_email: str) -> list[dict]:
     return [d for d in list_documents() if can_read(d, user_email)]
 
 
-def create_document(title: str, owner_email: str, nextcloud_path: str) -> dict:
+def create_document(
+    title: str,
+    owner_email: str,
+    nextcloud_path: str,
+    nextcloud_file_id: str = "",
+) -> dict:
     doc_id = str(uuid.uuid4())
     meta = {
         "id": doc_id,
@@ -78,6 +83,7 @@ def create_document(title: str, owner_email: str, nextcloud_path: str) -> dict:
         "owner_email": _normalize_email(owner_email),
         "shared_with": {},
         "nextcloud_path": nextcloud_path,
+        "nextcloud_file_id": (nextcloud_file_id or "").strip(),
     }
     with open(_meta_path(doc_id), "w") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
