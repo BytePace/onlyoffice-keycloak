@@ -61,6 +61,39 @@ def _is_column_name(value: str) -> bool:
     return bool(_COLUMN_RE.match((value or "").strip()))
 
 
+def _cell_is_empty(value) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip() == ""
+    return False
+
+
+def _last_occupied_row_in_column(ws, column_letter: str) -> int:
+    """Highest row index with a non-empty value in the given column, or 0."""
+    column = (column_letter or "").upper().strip()
+    if not column:
+        return 0
+    for row in range(ws.max_row, 0, -1):
+        if not _cell_is_empty(ws[f"{column}{row}"].value):
+            return row
+    return 0
+
+
+def _first_free_row_for_columns(ws, column_letters: list[str]) -> int:
+    """
+    First row where every target column is empty.
+
+    Matches Google Sheets behaviour: take the deepest occupied row across the
+    write columns and append on the next row, ignoring data outside the range.
+    """
+    columns = {(col or "").upper().strip() for col in column_letters if (col or "").strip()}
+    if not columns:
+        return 1
+    max_occupied = max(_last_occupied_row_in_column(ws, col) for col in columns)
+    return max_occupied + 1
+
+
 def append_rows(path: Path, sheet_name: str, field_rows: list[dict[str, str]]) -> None:
     doc_id = _doc_id_from_path(path)
     with _get_lock(doc_id):
@@ -71,11 +104,12 @@ def append_rows(path: Path, sheet_name: str, field_rows: list[dict[str, str]]) -
         # to those columns without creating an implicit header row.
         all_keys_flat = [k for row in field_rows for k in row]
         if all_keys_flat and all(_is_column_name(k) for k in all_keys_flat):
+            write_columns = list(dict.fromkeys(k.upper().strip() for k in all_keys_flat))
+            target_row = _first_free_row_for_columns(ws, write_columns)
             for row_data in field_rows:
-                is_empty_sheet = ws.max_row == 0 or ws.cell(1, 1).value is None
-                target_row = 1 if is_empty_sheet else ws.max_row + 1
                 for col, value in row_data.items():
                     ws[f"{col.upper().strip()}{target_row}"] = value
+                target_row += 1
             wb.save(path)
             return
 

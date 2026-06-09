@@ -4,6 +4,8 @@ import httpx
 from fastapi import HTTPException, Request
 from jose import JWTError, jwt
 
+from .session_store import SESSION_COOKIE, load_session
+
 # Internal issuer used for JWKS fetch (container-to-container)
 KEYCLOAK_ISSUER = os.getenv("KEYCLOAK_ISSUER", "")
 # External issuer embedded in tokens (public URL)
@@ -28,18 +30,27 @@ def invalidate_jwks_cache() -> None:
     _jwks_cache = None
 
 
-async def get_current_user(request: Request) -> dict:
-    """Get current user from Bearer token or cookie"""
-    token = None
-
-    # Try Bearer token from Authorization header
+def resolve_access_token(request: Request) -> str | None:
+    """Bearer header, legacy access_token cookie, or server-side api_session."""
     auth_header = request.headers.get("authorization", "")
     if auth_header.startswith("Bearer "):
-        token = auth_header[7:]  # Remove "Bearer " prefix
-    # Fall back to cookie
-    elif "access_token" in request.cookies:
-        token = request.cookies["access_token"]
+        token = auth_header[7:].strip()
+        if token:
+            return token
+    cookie_token = (request.cookies.get("access_token") or "").strip()
+    if cookie_token:
+        return cookie_token
+    session_id = (request.cookies.get(SESSION_COOKIE) or "").strip()
+    if session_id:
+        session = load_session(session_id)
+        if session:
+            return (session.get("access_token") or "").strip()
+    return None
 
+
+async def get_current_user(request: Request) -> dict:
+    """Get current user from Bearer token or cookie"""
+    token = resolve_access_token(request)
 
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")

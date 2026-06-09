@@ -94,6 +94,39 @@ By default it targets `root@91.99.85.118`, deploys `sheets.bytepace.com` + `auth
 - `user_oidc` is auto-installed and configured against Keycloak realm `ssa`
 - OIDC login entrypoint: `https://<domain>/apps/user_oidc/login/1`
 - Local login form is disabled and `/login` auto-redirects to Keycloak (`keycloak-ssa`)
-- Contacts list is hidden by default (`contactsinteraction` disabled). Use `--show-contacts` to enable it.
+- The **Contacts** app (`contacts`) is installed and enabled for address books and Teams/Circles management.
+- The header **Search contacts** menu stays hidden by default (`contactsinteraction` disabled, `dav` system address book not exposed, `theming_customcss` hides `#contactsmenu` on NC 29). Use `--show-contacts` to show that menu again.
+- User enumeration in sharing/Teams is disabled: partial search must not list all accounts; adding a user share requires the **full email** (`shareapi_restrict_user_enumeration_full_match_email=yes`, not userid-only).
 - To configure mail for both Keycloak and Nextcloud, pass `--email-user`, `--email-password`, optionally `--email-host` and `--email-port`.
 - iOS mobile config JSON is written to `/opt/nextcloud-onlyoffice/deploy-output.txt`.
+
+## Sharing spreadsheets (iOS picker + `/api` list)
+
+The API document list (`GET /api/orgs/.../workspaces`) is **not** the same as opening a public link (`https://<domain>/s/...`) from an email.
+
+| How User1 shares | Visible to User2 in API / iOS picker? |
+|------------------|----------------------------------------|
+| Nextcloud **Share → user** (full email of User2, must exist in Keycloak/Nextcloud) | Yes (after sync on list) |
+| `POST /api/docs/{doc_id}/share` on the API web UI | Yes |
+| Public link or “send link by email” only (`/s/...`) | **No** — link works in browser, not in picker |
+
+**Recommended:** User1 opens the file in Nextcloud Files → Share → invite **User2’s login email** (same as Keycloak, e.g. OIDC `mapping-uid=email`). User2 signs in at `https://<domain>/` via Keycloak, then opens the picker or `https://<domain>/api/`.
+
+**Storage location:** New spreadsheets from the mobile app are created in the user's **Nextcloud Files root** by default (`NEXTCLOUD_FILES_DIR` empty). Set `NEXTCLOUD_FILES_DIR` to a folder name if you want to scope new files to a subfolder instead.
+
+**Shared folders:** When User1 shares a folder with User2, Nextcloud mounts it as a top-level folder (e.g. `SSA Forms` or `SSA Forms (2)` if the name collides). The workspace list includes a `folders` array (received shares) so the iOS picker shows those mounts separately. Spreadsheets inside use `parent_path` such as `SSA Forms (2)/…`.
+
+If `NEXTCLOUD_FILES_DIR` is set to a subfolder name and that path is already a received share mount, new files go to `NEXTCLOUD_OWN_FILES_DIR_FALLBACK` (default `SSA Forms (My files)`) so they stay in the recipient's own storage.
+
+**User share (required for picker):** User1 → Share → **Share with users** → full email `user2@example.com` (not “Copy link” alone). If Nextcloud requires share acceptance, open [Pending shares](https://<domain>/apps/files/pendingshares) or reload the API/iOS picker (auto-accept after deploy).
+
+**Troubleshooting:** As User2, open `https://<domain>/api/session-info` (while logged in). Check:
+- `nextcloud_pending_shares` — shares waiting for acceptance (API auto-accepts on list)
+- `nextcloud_shared_with_me_total` — accepted shares from OCS (0 = no user share to this account)
+- `nextcloud_dav_workbooks` — xlsx files Nextcloud returns over WebDAV (includes subfolders and share mounts)
+- `nextcloud_shared_folder_mounts` — received folder shares for the picker `folders[]` array
+- `documents_in_api_list` — documents returned to the iOS picker after sync
+
+If `nextcloud_dav_workbooks` is `0`, the API token cannot list Nextcloud files (re-login at `/api/oauth/login` so the token includes the `nextcloud` audience). If DAV count is correct but `documents_in_api_list` is lower, check `documents_in_storage` and re-open the picker.
+
+**Two separate logins:** Signing in on `https://<domain>/` (Nextcloud) does **not** authenticate `https://<domain>/api/`. Open `https://<domain>/api/oauth/login` (or `/api/` → redirect) once; after success, `/api/session-info` works. A `502` on `/api/oauth/callback` usually means the API container cannot reach Keycloak — redeploy so `nc-api` has `extra_hosts` for your auth host and uses the internal token URL.

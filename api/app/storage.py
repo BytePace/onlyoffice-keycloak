@@ -41,32 +41,77 @@ def _normalize_email(email: str) -> str:
     return (email or "").strip().lower()
 
 
-def get_doc_role(meta: dict, user_email: str) -> str | None:
+def user_identities(user: dict) -> set[str]:
+    """All JWT identities used to match owner/shared_with (email, username, sub, NC user id)."""
+    ids: set[str] = set()
+    for key in ("email", "preferred_username", "sub", "nextcloud_user_id"):
+        value = _normalize_email(str(user.get(key) or ""))
+        if value:
+            ids.add(value)
+    return ids
+
+
+def get_doc_role(meta: dict, user: dict | str) -> str | None:
     """
     Returns one of: owner/editor/viewer or None if no access.
+    Accepts a JWT claims dict or a single normalized email string (legacy).
     """
-    email = _normalize_email(user_email)
+    identities = user_identities(user) if isinstance(user, dict) else {_normalize_email(user)}
+    if not identities:
+        return None
+
     owner = _normalize_email(meta.get("owner_email", ""))
-    if owner and email == owner:
+    if owner and owner in identities:
         return "owner"
 
     shared_with = meta.get("shared_with") or {}
-    role = shared_with.get(email)
-    if role in {"viewer", "editor"}:
-        return role
+    if not isinstance(shared_with, dict):
+        return None
+    for shared_email, role in shared_with.items():
+        if _normalize_email(shared_email) in identities and role in {"viewer", "editor"}:
+            return role
     return None
 
 
-def can_read(meta: dict, user_email: str) -> bool:
-    return get_doc_role(meta, user_email) in {"owner", "editor", "viewer"}
+def can_read(meta: dict, user: dict | str) -> bool:
+    return get_doc_role(meta, user) in {"owner", "editor", "viewer"}
 
 
-def can_write(meta: dict, user_email: str) -> bool:
-    return get_doc_role(meta, user_email) in {"owner", "editor"}
+def can_write(meta: dict, user: dict | str) -> bool:
+    return get_doc_role(meta, user) in {"owner", "editor"}
 
 
-def list_documents_for_user(user_email: str) -> list[dict]:
-    return [d for d in list_documents() if can_read(d, user_email)]
+def list_documents_for_user(user: dict | str) -> list[dict]:
+    return [d for d in list_documents() if can_read(d, user)]
+
+
+def find_document_by_nextcloud_file_id(file_id: str) -> dict | None:
+    needle = (file_id or "").strip()
+    if not needle:
+        return None
+    for meta in list_documents():
+        if (meta.get("nextcloud_file_id") or "").strip() == needle:
+            return meta
+    return None
+
+
+def find_document_by_nextcloud_path(path: str) -> dict | None:
+    needle = _normalize_nc_path(path)
+    if not needle:
+        return None
+    for meta in list_documents():
+        if _normalize_nc_path(meta.get("nextcloud_path") or "") == needle:
+            return meta
+    return None
+
+
+def _normalize_nc_path(path: str) -> str:
+    cleaned = (path or "").strip()
+    if not cleaned:
+        return ""
+    if not cleaned.startswith("/"):
+        cleaned = "/" + cleaned
+    return cleaned
 
 
 def create_document(
@@ -103,6 +148,27 @@ def save_document_meta(doc_id: str, meta: dict) -> None:
         json.dump(meta, f, ensure_ascii=False, indent=2)
 
 
+def get_content_revision(meta: dict | None) -> int:
+    if not meta:
+        return 0
+    try:
+        return max(0, int(meta.get("content_revision") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def bump_content_revision(doc_id: str) -> int:
+    """Increment revision after external API writes so open browser editors can reload."""
+    meta = get_document_meta(doc_id)
+    if not meta:
+        raise FileNotFoundError(doc_id)
+    revision = get_content_revision(meta) + 1
+    meta = dict(meta)
+    meta["content_revision"] = revision
+    save_document_meta(doc_id, meta)
+    return revision
+
+
 def share_document(doc_id: str, email: str, role: str) -> dict:
     meta = get_document_meta(doc_id)
     if not meta:
@@ -137,6 +203,45 @@ def list_shares(doc_id: str) -> list[dict]:
         return []
     items = [{"email": k, "role": v} for k, v in shared_with.items() if v in {"viewer", "editor"}]
     return sorted(items, key=lambda x: x["email"])
+
+
+def ensure_nextcloud_path(doc_id: str, nextcloud_path: str) -> dict | None:
+    meta = get_document_meta(doc_id)
+    if not meta:
+        return None
+    path = _normalize_nc_path(nextcloud_path)
+    if not path:
+        return meta
+    current = _normalize_nc_path(meta.get("nextcloud_path") or "")
+    if current:
+        return meta
+    meta = dict(meta)
+    meta["nextcloud_path"] = path
+    save_document_meta(doc_id, meta)
+    return meta
+
+
+def ensure_owner_email(doc_id: str, owner_label: str) -> dict | None:
+    """Fill owner_email when missing (e.g. shared docs synced with Nextcloud uid only)."""
+    meta = get_document_meta(doc_id)
+    if not meta:
+        return None
+    label = _normalize_email(owner_label)
+    if not label:
+        return meta
+    current = _normalize_email(meta.get("owner_email", ""))
+    if current:
+        return meta
+    meta = dict(meta)
+    meta["owner_email"] = label
+    save_document_meta(doc_id, meta)
+    return meta
+
+
+def delete_document(doc_id: str) -> None:
+    p = _meta_path(doc_id)
+    if p.exists():
+        p.unlink()
 
 
 def revoke_share(doc_id: str, email: str) -> dict:

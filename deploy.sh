@@ -265,6 +265,10 @@ case "$KEYCLOAK_MODE" in
     ;;
 esac
 
+KEYCLOAK_HOST="${KEYCLOAK_URL#https://}"
+KEYCLOAK_HOST="${KEYCLOAK_HOST#http://}"
+KEYCLOAK_HOST="${KEYCLOAK_HOST%%/*}"
+
 mkdir -p "$DEPLOY_DIR"
 rm -rf "${DEPLOY_DIR}/api"
 cp -r "${SCRIPT_DIR}/api" "${DEPLOY_DIR}/api"
@@ -284,6 +288,7 @@ KEYCLOAK_MODE=${KEYCLOAK_MODE}
 KEYCLOAK_URL=${KEYCLOAK_URL}
 KEYCLOAK_REALM=${KEYCLOAK_REALM}
 KEYCLOAK_INTERNAL_ISSUER=${KEYCLOAK_INTERNAL_ISSUER}
+KEYCLOAK_HOST=${KEYCLOAK_HOST}
 KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD}
 POSTGRES_KEYCLOAK_PASSWORD=${POSTGRES_KEYCLOAK_PASSWORD}
 KEYCLOAK_VERSION=${KEYCLOAK_VERSION}
@@ -336,7 +341,10 @@ services:
       REDIS_HOST: redis
       OVERWRITEPROTOCOL: https
       OVERWRITEHOST: ${APP_DOMAIN}
+      OVERWRITECLIURL: https://${APP_DOMAIN}
       TRUSTED_PROXIES: 172.16.0.0/12
+    extra_hosts:
+      - "${APP_DOMAIN}:host-gateway"
     ports:
       - "127.0.0.1:${NC_PORT}:80"
     volumes:
@@ -354,9 +362,11 @@ services:
       ONLYOFFICE_JWT_SECRET: ${ONLYOFFICE_JWT_SECRET}
       ONLYOFFICE_DOCS_EXTERNAL_URL: https://${APP_DOMAIN}/editor
       API_EXTERNAL_URL: https://${APP_DOMAIN}/api
+      API_INTERNAL_URL: http://api:8000
       NEXTCLOUD_BASE_URL: https://${APP_DOMAIN}
-      NEXTCLOUD_FILES_DIR: SSA Forms
       DATA_DIR: /data
+    extra_hosts:
+      - "${KEYCLOAK_HOST}:host-gateway"
     volumes:
       - nc-api-data:/data
     ports:
@@ -372,6 +382,8 @@ services:
       JWT_SECRET: ${ONLYOFFICE_JWT_SECRET}
       JWT_HEADER: Authorization
       JWT_IN_BODY: "true"
+      ALLOW_PRIVATE_IP_ADDRESS: "true"
+      ALLOW_META_IP_ADDRESS: "true"
     ports:
       - "127.0.0.1:${OO_PORT}:80"
     volumes:
@@ -458,6 +470,8 @@ if [[ "$KEYCLOAK_MODE" == "new" ]]; then
     fail "Keycloak not ready"
   fi
 fi
+log "Building API image (picks up ${DEPLOY_DIR}/api from this deploy)"
+docker_compose --env-file "$ENV_FILE" build api
 docker_compose --env-file "$ENV_FILE" up -d db redis nextcloud onlyoffice api
 
 log "Waiting for Nextcloud"
@@ -473,27 +487,128 @@ log "Configuring Nextcloud ONLYOFFICE app"
 occ_exec app:install onlyoffice >/dev/null 2>&1 || true
 occ_exec app:enable onlyoffice >/dev/null 2>&1 || true
 occ_exec app:disable richdocuments >/dev/null 2>&1 || true
+occ_exec app:disable sharebymail >/dev/null 2>&1 || true
 
 occ_exec config:app:set onlyoffice DocumentServerUrl --value="https://${APP_DOMAIN}/editor/" >/dev/null
 occ_exec config:app:set onlyoffice DocumentServerInternalUrl --value="http://nc-onlyoffice/" >/dev/null
 occ_exec config:app:set onlyoffice StorageUrl --value="https://${APP_DOMAIN}/" >/dev/null
 occ_exec config:app:set onlyoffice jwt_secret --value="${ONLYOFFICE_JWT_SECRET}" >/dev/null
+log "Allowing exact email lookup for Nextcloud user shares"
+occ_exec config:app:set core shareapi_allow_share_dialog_user_enumeration --value=no >/dev/null
 occ_exec config:app:set files_sharing shareapi_allow_share_dialog_user_enumeration --value=no >/dev/null
+# Require full email when adding a user share (not partial name search).
+occ_exec config:app:set core shareapi_restrict_user_enumeration_full_match --value=yes >/dev/null 2>&1 || true
+occ_exec config:app:set core shareapi_restrict_user_enumeration_full_match_email --value=yes >/dev/null
+occ_exec config:app:set core shareapi_restrict_user_enumeration_full_match_userid --value=no >/dev/null
+# Mount user shares immediately (no manual accept in Files → Pending shares).
+occ_exec config:app:set core shareapi_enable_share_accept --value=no >/dev/null 2>&1 || true
+log "Enabling Nextcloud Contacts app (address book, Teams/Circles UI)"
+occ_exec app:install contacts >/dev/null 2>&1 || true
+occ_exec app:enable contacts >/dev/null 2>&1 || true
+occ_exec config:system:set profile.enabled --type=boolean --value=false >/dev/null 2>&1 || true
+occ_exec config:app:set settings profile_enabled_by_default --value="0" >/dev/null 2>&1 || true
 if [[ "$SHOW_CONTACTS" == true ]]; then
   occ_exec app:enable contactsinteraction >/dev/null 2>&1 || true
+  occ_exec config:app:set dav system_addressbook_exposed --value="yes" >/dev/null
+  occ_exec config:app:delete theming_customcss customcss >/dev/null 2>&1 || true
 else
   occ_exec app:disable contactsinteraction >/dev/null 2>&1 || true
+  # Limits system address book; on NC 29 /contactsmenu may still list users (server bug).
+  occ_exec config:app:set dav system_addressbook_exposed --value="no" >/dev/null
+  # Hide the header contacts icon (reliable on NC 29).
+  occ_exec app:install theming_customcss >/dev/null 2>&1 || true
+  occ_exec app:enable theming_customcss >/dev/null 2>&1 || true
+  occ_exec config:app:set theming_customcss customcss --value='#contactsmenu { display: none !important; }' >/dev/null
 fi
 
 log "Disabling non-essential Nextcloud apps"
-for nc_app in comments firstrunwizard photos recommendations nextcloud_announcements support weather_status federation; do
+for nc_app in comments firstrunwizard photos recommendations nextcloud_announcements support weather_status federation dashboard; do
   occ_exec app:disable "$nc_app" >/dev/null 2>&1 || true
 done
 
 occ_exec config:system:set trusted_domains 0 --value="${APP_DOMAIN}" >/dev/null
+occ_exec config:system:set overwrite.cli.url --value="https://${APP_DOMAIN}" >/dev/null
+log "Configuring Teams/Circles loopback (required to create teams)"
+occ_exec app:enable circles >/dev/null 2>&1 || true
+occ_exec config:app:set circles loopback_cloud_scheme --value="https" >/dev/null 2>&1 || true
+occ_exec config:app:set circles loopback_cloud_id --value="${APP_DOMAIN}" >/dev/null 2>&1 || true
+occ_exec config:app:set circles loopback_cloud_path --value="" >/dev/null 2>&1 || true
+occ_exec circles:sync >/dev/null 2>&1 || true
 occ_exec config:system:set defaultapp --value="files" >/dev/null
 occ_exec config:system:set skeletondirectory --value="" >/dev/null
 occ_exec config:system:set templatedirectory --value="" >/dev/null
+
+log "Configuring Nextcloud cron background jobs"
+occ_exec config:system:set backgroundjobs_mode --value=cron >/dev/null
+cat >/etc/cron.d/nextcloud-onlyoffice <<'CRON'
+*/5 * * * * root docker exec -u 33 nc-app php -f /var/www/html/cron.php >/dev/null 2>&1
+CRON
+chmod 0644 /etc/cron.d/nextcloud-onlyoffice
+systemctl reload cron >/dev/null 2>&1 || systemctl reload crond >/dev/null 2>&1 || true
+
+log "Removing legacy autoheal container if present"
+docker rm -f nc-autoheal >/dev/null 2>&1 || true
+
+log "Installing daily backup job"
+install -d -m 0700 "${DEPLOY_DIR}/backups"
+cat >"${DEPLOY_DIR}/backup.sh" <<'BACKUP'
+#!/usr/bin/env bash
+set -euo pipefail
+
+DEPLOY_DIR="/opt/nextcloud-onlyoffice"
+PROJECT="$(basename "$DEPLOY_DIR")"
+RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-7}"
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+DEST="${DEPLOY_DIR}/backups/${STAMP}"
+
+mkdir -p "$DEST"
+chmod 0700 "$DEST"
+
+occ() {
+  docker exec -u 33 nc-app php occ "$@"
+}
+
+db_user="$(occ config:system:get dbuser)"
+db_pass="$(occ config:system:get dbpassword)"
+db_name="$(occ config:system:get dbname)"
+
+docker exec nc-db sh -c "MYSQL_PWD=\"\$1\" mariadb-dump --single-transaction --quick -u \"\$2\" \"\$3\"" sh "$db_pass" "$db_user" "$db_name" | gzip -9 >"${DEST}/nextcloud.sql.gz"
+docker exec nc-postgres-keycloak sh -c 'pg_dump -U keycloak keycloak' | gzip -9 >"${DEST}/keycloak.sql.gz"
+
+backup_volume() {
+  local volume="$1"
+  local target="$2"
+  docker run --rm \
+    -v "${PROJECT}_${volume}:/src:ro" \
+    -v "${DEST}:/backup" \
+    nextcloud:29-apache \
+    tar -C /src -czf "/backup/${target}" .
+}
+
+backup_volume nc-nextcloud nextcloud-files.tar.gz
+backup_volume nc-api-data api-data.tar.gz
+backup_volume nc-oo-data onlyoffice-data.tar.gz
+backup_volume nc-keycloak-db keycloak-db-volume.tar.gz
+
+if [[ -f "${DEPLOY_DIR}/docker-compose.yml" ]]; then
+  cp "${DEPLOY_DIR}/docker-compose.yml" "${DEST}/docker-compose.yml"
+fi
+
+if [[ -f "${DEPLOY_DIR}/.env" ]]; then
+  sed -E 's/=(.*)$/=<redacted>/' "${DEPLOY_DIR}/.env" >"${DEST}/env.redacted"
+fi
+
+find "$DEST" -maxdepth 1 -type f -print0 | sort -z | xargs -0 sha256sum >"${DEST}/SHA256SUMS"
+find "${DEPLOY_DIR}/backups" -mindepth 1 -maxdepth 1 -type d -mtime +"${RETENTION_DAYS}" -exec rm -rf {} +
+
+echo "backup completed: ${DEST}"
+BACKUP
+chmod 0700 "${DEPLOY_DIR}/backup.sh"
+cat >/etc/cron.d/nextcloud-onlyoffice-backup <<BACKUP_CRON
+17 2 * * * root ${DEPLOY_DIR}/backup.sh >> ${DEPLOY_DIR}/backups/backup.log 2>&1
+BACKUP_CRON
+chmod 0644 /etc/cron.d/nextcloud-onlyoffice-backup
+systemctl reload cron >/dev/null 2>&1 || systemctl reload crond >/dev/null 2>&1 || true
 
 auth_ip=$(hostname -I | awk '{print $1}')
 [[ -n "$auth_ip" ]] && occ_exec config:system:set trusted_proxies 0 --value="$auth_ip" >/dev/null || true
@@ -638,6 +753,17 @@ OO_CLIENT_SECRET_RESPONSE=$(keycloak_request GET "${KEYCLOAK_ADMIN_API_URL}/admi
 OO_CLIENT_SECRET="$(printf '%s' "$OO_CLIENT_SECRET_RESPONSE" | jq -r '.value // empty')"
 [[ -n "$OO_CLIENT_SECRET" ]] || fail "Could not obtain onlyoffice-client secret from Keycloak"
 
+# Web /api/ login uses onlyoffice-client; token must include audience "nextcloud" for OCS/WebDAV sync.
+OO_CLIENT_NEXTCLOUD_MAPPER_EXISTS=$(keycloak_request GET "${KEYCLOAK_ADMIN_API_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${OO_CLIENT_UUID}/protocol-mappers/models" \
+  -H "Authorization: Bearer ${KC_TOKEN}" | jq -r '.[] | select(.name=="nextcloud-audience") | .id // empty' || true)
+if [[ -z "$OO_CLIENT_NEXTCLOUD_MAPPER_EXISTS" ]]; then
+  keycloak_request POST "${KEYCLOAK_ADMIN_API_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${OO_CLIENT_UUID}/protocol-mappers/models" \
+    -H "Authorization: Bearer ${KC_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d '{"name":"nextcloud-audience","protocol":"openid-connect","protocolMapper":"oidc-audience-mapper","consentRequired":false,"config":{"included.client.audience":"nextcloud","access.token.claim":"true","id.token.claim":"false"}}' >/dev/null
+  success "Added nextcloud-audience mapper to onlyoffice-client (required for /api/ share sync)"
+fi
+
 OO_MOBILE_CLIENT_ID="onlyoffice-mobile"
 OO_MOBILE_RESPONSE=$(keycloak_request GET "${KEYCLOAK_ADMIN_API_URL}/admin/realms/${KEYCLOAK_REALM}/clients?clientId=${OO_MOBILE_CLIENT_ID}" \
   -H "Authorization: Bearer ${KC_TOKEN}")
@@ -691,6 +817,7 @@ if grep -q '^OO_CLIENT_SECRET=' "$ENV_FILE"; then
 else
   echo "OO_CLIENT_SECRET=${OO_CLIENT_SECRET}" >> "$ENV_FILE"
 fi
+docker_compose --env-file "$ENV_FILE" build api
 docker_compose --env-file "$ENV_FILE" up -d api >/dev/null || true
 
 KC_CLIENT_ID="nextcloud"
