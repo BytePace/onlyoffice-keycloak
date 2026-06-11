@@ -7,7 +7,7 @@
 
         <div id="kc-form-options" class="${properties.kcFormGroupClass!}">
             <div class="${properties.kcFormOptionsWrapperClass!}">
-                <span><a href="${url.loginUrl}">${kcSanitize(msg("backToLogin"))?no_esc}</a></span>
+                <span><a href="${url.loginRestartFlowUrl}">${kcSanitize(msg("backToLogin"))?no_esc}</a></span>
             </div>
         </div>
 
