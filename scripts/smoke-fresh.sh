@@ -73,6 +73,7 @@ done
 log "Syncing local deploy scripts to ${REMOTE_HOST}:${REMOTE_REPO_PATH}"
 scp "${REPO_ROOT}/deploy.sh" "${REMOTE_HOST}:${REMOTE_REPO_PATH}/deploy.sh"
 scp "${REPO_ROOT}/scripts/reset-fresh.sh" "${REMOTE_HOST}:${REMOTE_REPO_PATH}/scripts/reset-fresh.sh"
+scp -r "${REPO_ROOT}/keycloak" "${REMOTE_HOST}:${REMOTE_REPO_PATH}/"
 
 log "Running fresh reset on VPS"
 ssh "$REMOTE_HOST" "bash '${REMOTE_REPO_PATH}/scripts/reset-fresh.sh'"

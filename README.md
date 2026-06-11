@@ -98,6 +98,7 @@ By default it targets `root@91.99.85.118`, deploys `sheets.bytepace.com` + `auth
 - The header **Search contacts** menu stays hidden by default (`contactsinteraction` disabled, `dav` system address book not exposed, `theming_customcss` hides `#contactsmenu` on NC 29). Use `--show-contacts` to show that menu again.
 - User enumeration in sharing/Teams is disabled: partial search must not list all accounts; adding a user share requires the **full email** (`shareapi_restrict_user_enumeration_full_match_email=yes`, not userid-only).
 - To configure mail for both Keycloak and Nextcloud, pass `--email-user`, `--email-password`, optionally `--email-host` and `--email-port`.
+- After self-registration, Keycloak shows **Email verification** with **Back to Login** / **Back to Application** links (custom login theme `ssa` in `keycloak/themes/ssa`; applied automatically on `--keycloak-mode new`, copied into a local Keycloak container on `--keycloak-mode existing`).
 - iOS mobile config JSON is written to `/opt/nextcloud-onlyoffice/deploy-output.txt`.
 
 ## Sharing spreadsheets (iOS picker + `/api` list)

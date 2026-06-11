@@ -103,7 +103,8 @@ update_realm_smtp() {
             password: $pw,
             from: $u
         }
-        | .resetPasswordAllowed = true') || {
+        | .resetPasswordAllowed = true
+        | .loginTheme = "ssa"') || {
         warn "Failed to assemble SMTP JSON (jq). Configure SMTP manually in Keycloak admin console."
         return 0
     }
@@ -135,6 +136,7 @@ else
   "registrationAllowed": true,
   "resetPasswordAllowed": true,
   "verifyEmail": true,
+  "loginTheme": "ssa",
   "ssoSessionIdleTimeout": 3600,
   "ssoSessionMaxLifespan": 36000,
   "offlineSessionIdleTimeout": 604800
@@ -145,6 +147,22 @@ fi
 
 # ── Configure SMTP for realm ──────────────────────────────────────────────────
 update_realm_smtp "$TOKEN"
+
+# ── Ensure custom login theme (email verification back link) ───────────────────
+realm_theme_json=$(kc_get "${KEYCLOAK_URL}/admin/realms/${REALM}" 2>/dev/null || true)
+if [[ -n "$realm_theme_json" ]] && echo "$realm_theme_json" | jq -e . >/dev/null 2>&1; then
+    theme_payload=$(echo "$realm_theme_json" | jq '.loginTheme = "ssa"')
+    theme_http=$(curl -sS -o /tmp/realm-theme-response.txt -w "%{http_code}" -X PUT \
+        "${KEYCLOAK_URL}/admin/realms/${REALM}" \
+        -H "Authorization: Bearer ${TOKEN}" \
+        -H "Content-Type: application/json; charset=UTF-8" \
+        -d "$theme_payload")
+    if [[ "$theme_http" == "204" || "$theme_http" == "200" ]]; then
+        log "Login theme 'ssa' enabled for realm '${REALM}'."
+    else
+        warn "Could not set login theme 'ssa' (HTTP ${theme_http}). Deploy keycloak/themes/ssa to your Keycloak server."
+    fi
+fi
 
 # ── Helper: create or skip client ────────────────────────────────────────────
 create_client_if_missing() {
@@ -190,6 +208,8 @@ kc_get "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${CLIENT_INTERNAL_ID}" \
       .redirectUris = ["https://\($app)/api/*", "http://\($app)/api/*"]
       | .webOrigins = ["https://\($app)", "http://\($app)"]
       | .attributes["post.logout.redirect.uris"] = "https://\($app)/api/ https://\($app)/api/signed-out http://\($app)/api/ http://\($app)/api/signed-out"
+      | .rootUrl = "https://\($app)/api/"
+      | .baseUrl = "https://\($app)/api/"
   ' \
   | kc_put "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${CLIENT_INTERNAL_ID}" -d @- \
   || warn "Could not update onlyoffice-client redirect/web origin settings"
