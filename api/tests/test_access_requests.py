@@ -48,6 +48,16 @@ class AccessRequestsStorageTests(unittest.TestCase):
         self.assertEqual(first["token"], second["token"])
         self.assertEqual(second["doc_title"], "Food Diary v2")
 
+    def test_create_request_with_owner_nc_id_only(self):
+        record = access_requests.create_or_refresh_request(
+            doc_id="doc-1",
+            doc_title="Food Diary",
+            requester_email="user2@example.com",
+            owner_nc_id="3aa2e5d-f71c50bc969206a790f6eddf1d8557bd80b9a598b199c91713a85db2a",
+        )
+        self.assertEqual(record["owner_email"], "")
+        self.assertTrue(record["owner_nc_id"])
+
     def test_update_request_status(self):
         record = access_requests.create_or_refresh_request(
             doc_id="doc-1",

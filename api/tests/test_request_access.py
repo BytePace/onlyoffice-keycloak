@@ -46,13 +46,14 @@ class RequestAccessTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(response["can_write"])
         self.assertFalse(response["email_sent"])
 
-    async def test_request_access_denied_when_owner_is_not_deliverable_email(self):
+    async def test_request_access_saved_when_owner_email_cannot_be_resolved(self):
         request = MagicMock()
         user = {"email": "user2@example.com"}
+        owner_nc_id = "3aa2e5d-f71c50bc969206a790f6eddf1d8557bd80b9a598b199c91713a85db2a"
         meta = {
             "id": "doc-1",
             "title": "Food Diary",
-            "owner_email": "3aa2e5d-f71c50bc969206a790f6eddf1d8557bd80b9a598b199c91713a85db2a",
+            "owner_email": owner_nc_id,
             "shared_with": {},
         }
 
@@ -64,16 +65,19 @@ class RequestAccessTests(unittest.IsolatedAsyncioTestCase):
             main.nextcloud, "accept_all_pending_shares", new=AsyncMock(return_value=(0, []))
         ), patch.object(
             main.nextcloud,
-            "resolve_notification_email",
-            new=AsyncMock(return_value=None),
+            "resolve_document_owner_notification",
+            new=AsyncMock(return_value=(None, owner_nc_id)),
         ), patch.object(main.storage, "can_read", return_value=False), patch.object(
             main.storage, "can_write", return_value=False
-        ), patch.object(main.storage, "get_doc_role", return_value=None):
+        ), patch.object(main.storage, "get_doc_role", return_value=None), patch.object(
+            main, "API_EXTERNAL_URL", "https://sheets.example.com/api"
+        ):
             response = await main.request_doc_access("doc-1", request, user)
 
-        self.assertEqual(response["status"], "denied")
+        self.assertEqual(response["status"], "request_saved")
         self.assertIsNone(response["owner_email"])
         self.assertFalse(response["email_sent"])
+        self.assertIsNotNone(response["review_url"])
         self.assertNotIn("smtp", (response["email_error"] or "").lower())
 
     async def test_request_access_emails_owner_when_edit_access_missing(self):
@@ -94,8 +98,8 @@ class RequestAccessTests(unittest.IsolatedAsyncioTestCase):
             main.nextcloud, "accept_all_pending_shares", new=AsyncMock(return_value=(0, []))
         ), patch.object(
             main.nextcloud,
-            "resolve_notification_email",
-            new=AsyncMock(return_value="owner@example.com"),
+            "resolve_document_owner_notification",
+            new=AsyncMock(return_value=("owner@example.com", None)),
         ), patch.object(main.storage, "can_read", return_value=False), patch.object(
             main.storage, "can_write", return_value=False
         ), patch.object(main.storage, "get_doc_role", return_value=None), patch.object(

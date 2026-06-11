@@ -1150,6 +1150,14 @@ async def _sync_nextcloud_shares_for_user(
         else:
             if owner_id:
                 meta = storage.ensure_owner_email(meta["id"], owner_id) or meta
+                resolved_owner_email = await nextcloud.resolve_notification_email(
+                    owner_id,
+                    access_token,
+                )
+                if resolved_owner_email:
+                    meta = (
+                        storage.ensure_owner_email(meta["id"], resolved_owner_email) or meta
+                    )
             elif shared_mount and not (meta.get("owner_email") or "").strip():
                 mount = mount_by_name.get(top_folder, {})
                 inferred_owner = (
@@ -1467,19 +1475,17 @@ async def request_doc_access(
 
     can_read = storage.can_read(meta, user_ctx)
     can_write = storage.can_write(meta, user_ctx)
+    owner_notification_email, owner_nc_id = (
+        await nextcloud.resolve_document_owner_notification(meta, access_token)
+    )
     owner_label = (meta.get("owner_email") or "").strip().lower() or None
-    owner_notification_email = None
-    if owner_label:
-        owner_notification_email = await nextcloud.resolve_notification_email(
-            owner_label,
-            access_token,
-        )
-        if (
-            owner_notification_email
-            and owner_notification_email != owner_label
-            and not mailer.is_deliverable_email(owner_label)
-        ):
-            storage.ensure_owner_email(doc_id, owner_notification_email)
+    if (
+        owner_notification_email
+        and owner_label
+        and owner_notification_email != owner_label
+        and not mailer.is_deliverable_email(owner_label)
+    ):
+        storage.ensure_owner_email(doc_id, owner_notification_email)
     role = storage.get_doc_role(meta, user_ctx)
     doc_title = (meta.get("title") or meta.get("name") or doc_id).strip()
 
@@ -1505,10 +1511,15 @@ async def request_doc_access(
     email_error = None
     review_url = None
 
-    if not owner_notification_email:
+    owner_identity = owner_nc_id or (
+        owner_label
+        if owner_label and not mailer.is_deliverable_email(owner_label)
+        else ""
+    )
+    if not owner_notification_email and not owner_identity:
         status = "denied"
         email_error = mailer.user_facing_delivery_error()
-    elif requester_email == owner_notification_email:
+    elif owner_notification_email and requester_email == owner_notification_email:
         status = "denied"
         email_error = "You already own this document"
     else:
@@ -1517,10 +1528,11 @@ async def request_doc_access(
                 doc_id=doc_id,
                 doc_title=doc_title,
                 requester_email=requester_email,
-                owner_email=owner_notification_email,
+                owner_email=owner_notification_email or "",
+                owner_nc_id=owner_identity,
             )
             review_url = _access_request_review_url(access_record["token"])
-            if mailer.smtp_configured():
+            if owner_notification_email and mailer.smtp_configured():
                 try:
                     await asyncio.to_thread(
                         mailer.send_access_request_email,

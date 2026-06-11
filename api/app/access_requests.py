@@ -33,15 +33,20 @@ def create_or_refresh_request(
     doc_id: str,
     doc_title: str,
     requester_email: str,
-    owner_email: str,
+    owner_email: str = "",
+    owner_nc_id: str = "",
 ) -> dict:
     requester = _normalize_email(requester_email)
     owner = _normalize_email(owner_email)
-    if not requester or not owner:
-        raise ValueError("requester_email and owner_email are required")
-    if not mailer.is_deliverable_email(owner):
-        raise ValueError("Document owner does not have a deliverable email address")
-    if requester == owner:
+    nc_id = (owner_nc_id or "").strip().lower()
+    if not nc_id and owner and not mailer.is_deliverable_email(owner):
+        nc_id = owner
+        owner = ""
+    if not requester:
+        raise ValueError("requester_email is required")
+    if not mailer.is_deliverable_email(owner) and not nc_id:
+        raise ValueError("Document owner identity is required")
+    if mailer.is_deliverable_email(owner) and requester == owner:
         raise ValueError("owner cannot request access to their own document")
 
     existing = find_pending_for(doc_id, requester)
@@ -49,6 +54,10 @@ def create_or_refresh_request(
         record = existing
         record["updated_at"] = _now_iso()
         record["doc_title"] = (doc_title or record.get("doc_title") or doc_id).strip()
+        if mailer.is_deliverable_email(owner):
+            record["owner_email"] = owner
+        if nc_id:
+            record["owner_nc_id"] = nc_id
     else:
         token = secrets.token_urlsafe(32)
         record = {
@@ -56,7 +65,8 @@ def create_or_refresh_request(
             "doc_id": doc_id,
             "doc_title": (doc_title or doc_id).strip(),
             "requester_email": requester,
-            "owner_email": owner,
+            "owner_email": owner if mailer.is_deliverable_email(owner) else "",
+            "owner_nc_id": nc_id,
             "requested_role": REQUESTED_ROLE,
             "status": "pending",
             "created_at": _now_iso(),

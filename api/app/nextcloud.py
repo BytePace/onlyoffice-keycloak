@@ -621,6 +621,88 @@ async def resolve_notification_email(user_id_or_email: str, access_token: str) -
     return None
 
 
+async def lookup_document_owner_nc_id(meta: dict, access_token: str) -> str | None:
+    """Best-effort Nextcloud account id for the document owner from stored metadata or shares."""
+    from . import mailer
+
+    owner_label = (meta.get("owner_email") or "").strip().lower()
+    if owner_label and not mailer.is_deliverable_email(owner_label):
+        return owner_label
+
+    file_id = str(meta.get("nextcloud_file_id") or "").strip()
+    nc_path = _normalize_nc_path(
+        str(meta.get("nextcloud_path") or meta.get("path") or "").strip()
+    )
+    candidates: list[dict] = []
+    try:
+        candidates.extend(await list_accessible_workbooks(access_token))
+    except Exception as exc:
+        logger.warning("Workbook listing failed during owner lookup: %s", exc)
+    try:
+        for share in await _list_shares_with_me_raw(access_token):
+            if not isinstance(share, dict) or not _is_spreadsheet_share(share):
+                continue
+            raw_path = str(share.get("path") or "").strip()
+            file_target = str(share.get("file_target") or "").strip()
+            path = (
+                _normalize_nc_path(raw_path)
+                if raw_path
+                else _normalize_nc_path(file_target)
+                if file_target
+                else ""
+            )
+            candidates.append(
+                {
+                    "file_id": str(share.get("file_source") or "").strip(),
+                    "path": path,
+                    "owner_id": str(share.get("uid_owner") or "").strip().lower(),
+                }
+            )
+    except Exception as exc:
+        logger.warning("Share listing failed during owner lookup: %s", exc)
+
+    for item in candidates:
+        owner_id = (item.get("owner_id") or "").strip().lower()
+        if not owner_id:
+            continue
+        item_file_id = str(item.get("file_id") or "").strip()
+        item_path = _normalize_nc_path(str(item.get("path") or "").strip())
+        if file_id and item_file_id == file_id:
+            return owner_id
+        if nc_path and item_path and item_path == nc_path:
+            return owner_id
+    return None
+
+
+async def resolve_document_owner_notification(
+    meta: dict,
+    access_token: str,
+) -> tuple[str | None, str | None]:
+    """
+    Resolve owner mailbox (if any) and Nextcloud account id for access-request notifications.
+    """
+    from . import mailer
+
+    owner_label = (meta.get("owner_email") or "").strip().lower() or None
+    owner_nc_id = (
+        owner_label if owner_label and not mailer.is_deliverable_email(owner_label) else None
+    )
+    owner_notification_email = None
+    if owner_label:
+        owner_notification_email = await resolve_notification_email(owner_label, access_token)
+
+    if not owner_notification_email:
+        if not owner_nc_id:
+            owner_nc_id = await lookup_document_owner_nc_id(meta, access_token)
+        if owner_nc_id:
+            owner_notification_email = await resolve_notification_email(
+                owner_nc_id,
+                access_token,
+            )
+
+    return owner_notification_email, owner_nc_id
+
+
 async def _ocs_user_profile(user_id: str, access_token: str) -> dict:
     headers = {
         **_auth_headers(access_token),
