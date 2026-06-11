@@ -463,6 +463,10 @@ services:
       API_INTERNAL_URL: http://api:8000
       NEXTCLOUD_BASE_URL: https://${APP_DOMAIN}
       DATA_DIR: /data
+      EMAIL_USER: ${EMAIL_USER}
+      EMAIL_PASSWORD: ${EMAIL_PASSWORD}
+      EMAIL_HOST: ${EMAIL_HOST}
+      EMAIL_PORT: ${EMAIL_PORT}
     extra_hosts:
       - "${KEYCLOAK_HOST}:host-gateway"
     volumes:
@@ -889,10 +893,11 @@ OO_MOBILE_CLIENT_RESPONSE=$(keycloak_request GET "${KEYCLOAK_ADMIN_API_URL}/admi
 OO_MOBILE_CLIENT_UPDATED=$(printf '%s' "$OO_MOBILE_CLIENT_RESPONSE" | jq --arg r "${MOBILE_REDIRECT_URI}" '
       .redirectUris=[$r]
       | .webOrigins=["+"]
+      | .attributes["post.logout.redirect.uris"]=$r
+      | .attributes["pkce.code.challenge.method"]="S256"
       | .standardFlowEnabled=true
       | .publicClient=true
       | .directAccessGrantsEnabled=false
-      | .attributes["pkce.code.challenge.method"]="S256"
   ')
 keycloak_request PUT "${KEYCLOAK_ADMIN_API_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${OO_MOBILE_UUID}" \
   -H "Authorization: Bearer ${KC_TOKEN}" \

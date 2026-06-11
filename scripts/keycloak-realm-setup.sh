@@ -236,9 +236,24 @@ create_client_if_missing "onlyoffice-mobile" '{
   }
 }'
 
-# ── Audience mapper: mobile token includes onlyoffice-client as audience ──────
 MOBILE_INTERNAL_ID=$(kc_get "${KEYCLOAK_URL}/admin/realms/${REALM}/clients?clientId=onlyoffice-mobile" \
     | jq -r '.[0].id')
+[[ -n "$MOBILE_INTERNAL_ID" ]] || fail "Could not find onlyoffice-mobile"
+
+kc_get "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${MOBILE_INTERNAL_ID}" \
+  | jq --arg r "$MOBILE_REDIRECT_URI" '
+      .redirectUris = [$r]
+      | .webOrigins = ["+"]
+      | .attributes["post.logout.redirect.uris"] = $r
+      | .attributes["pkce.code.challenge.method"] = "S256"
+      | .standardFlowEnabled = true
+      | .publicClient = true
+      | .directAccessGrantsEnabled = false
+  ' \
+  | kc_put "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${MOBILE_INTERNAL_ID}" -d @- \
+  || warn "Could not update onlyoffice-mobile logout redirect settings"
+
+# ── Audience mapper: mobile token includes onlyoffice-client as audience ──────
 
 existing_mapper=$(kc_get "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${MOBILE_INTERNAL_ID}/protocol-mappers/models" \
     | jq -r '.[] | select(.name=="onlyoffice-audience") | .id // empty')

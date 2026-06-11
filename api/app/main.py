@@ -10,7 +10,7 @@ from urllib.parse import quote, urlencode
 
 import httpx
 from fastapi import Depends, HTTPException, Request, Cookie
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi import FastAPI
 
 from .auth import (
@@ -23,7 +23,16 @@ from .auth import (
 from .session_store import SESSION_COOKIE, delete_session, load_session, save_tokens
 from .models import AddRecordsRequest, CreateDocRequest, CreateTablesRequest, ShareDocRequest
 from jose import jwt
-from . import editor_session, nextcloud, onlyoffice, spreadsheet, storage
+from . import (
+    access_requests,
+    access_request_ui,
+    editor_session,
+    mailer,
+    nextcloud,
+    onlyoffice,
+    spreadsheet,
+    storage,
+)
 
 app = FastAPI(title="OnlyOffice Spreadsheet API", version="1.0.0")
 logger = logging.getLogger(__name__)
@@ -64,6 +73,25 @@ def _clear_api_cookies(response: Response) -> None:
     for name in _API_COOKIE_NAMES:
         response.delete_cookie(name, path=API_COOKIE_PATH)
         response.delete_cookie(name, path="/")
+
+
+def _api_public_base() -> str:
+    return (API_EXTERNAL_URL or API_INTERNAL_URL).rstrip("/")
+
+
+def _access_request_review_url(token: str) -> str:
+    return f"{_api_public_base()}/access-requests/{quote(token, safe='')}"
+
+
+async def _optional_current_user(request: Request) -> dict | None:
+    try:
+        return await get_current_user(request)
+    except HTTPException:
+        return None
+
+
+def _is_document_owner(meta: dict, user: dict) -> bool:
+    return storage.get_doc_role(meta, user) == "owner"
 
 
 def _user_email(user: dict) -> str:
@@ -242,7 +270,14 @@ async def http_exception_handler(request: Request, exc: HTTPException):
             status_code=302
         )
 
-    # Return normal error response
+    # REST clients under /api expect JSON, not HTML error pages.
+    accept = request.headers.get("accept", "")
+    if request.url.path.startswith("/api/") or "application/json" in accept.lower():
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail},
+        )
+
     return HTMLResponse(
         f"<h1>{exc.status_code}</h1><p>{exc.detail}</p>",
         status_code=exc.status_code
@@ -882,6 +917,10 @@ def _doc_list_item(meta: dict, user: dict) -> dict:
     item["parent_path"] = nextcloud.parent_path_from_nextcloud_path(nc_path)
     role = storage.get_doc_role(meta, user)
     item["is_owner"] = role == "owner"
+    item["can_read"] = storage.can_read(meta, user)
+    item["can_write"] = storage.can_write(meta, user)
+    if role:
+        item["role"] = role
     if role != "owner":
         owner_label = (meta.get("owner_email") or "").strip()
         if owner_label:
@@ -1397,6 +1436,288 @@ async def get_doc_meta(
         meta, user, access_token, write=False
     )
     return _doc_list_item(meta, user_ctx)
+
+
+@app.post("/docs/{doc_id}/request-access")
+async def request_doc_access(
+    doc_id: str,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """
+    Accept pending Nextcloud shares. If edit access is still missing, create an access
+    request and email the document owner a link to grant or deny (variant A).
+    """
+    meta = storage.get_document_meta(doc_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    access_token = _request_access_token(request)
+    user_ctx = await _user_with_nextcloud_id(user, access_token)
+    requester_email = _user_email(user_ctx)
+
+    pending_accepted = 0
+    pending_errors: list[str] = []
+    try:
+        pending_accepted, pending_errors = await nextcloud.accept_all_pending_shares(
+            access_token
+        )
+    except Exception as exc:
+        logger.warning("Pending share acceptance failed during request-access: %s", exc)
+
+    can_read = storage.can_read(meta, user_ctx)
+    can_write = storage.can_write(meta, user_ctx)
+    owner_email = (meta.get("owner_email") or "").strip().lower() or None
+    role = storage.get_doc_role(meta, user_ctx)
+    doc_title = (meta.get("title") or meta.get("name") or doc_id).strip()
+
+    if can_write:
+        status = "granted"
+        if pending_accepted:
+            status = "pending_accepted"
+        return {
+            "status": status,
+            "can_read": can_read,
+            "can_write": can_write,
+            "role": role,
+            "owner_email": owner_email,
+            "requester_email": requester_email,
+            "pending_shares_accepted": pending_accepted,
+            "pending_accept_errors": pending_errors,
+            "email_sent": False,
+            "review_url": None,
+        }
+
+    access_record = None
+    email_sent = False
+    email_error = None
+    review_url = None
+
+    if not owner_email:
+        status = "denied"
+        email_error = "Document owner email is unknown"
+    elif requester_email == owner_email:
+        status = "denied"
+        email_error = "You already own this document"
+    else:
+        try:
+            access_record = access_requests.create_or_refresh_request(
+                doc_id=doc_id,
+                doc_title=doc_title,
+                requester_email=requester_email,
+                owner_email=owner_email,
+            )
+            review_url = _access_request_review_url(access_record["token"])
+            if mailer.smtp_configured():
+                try:
+                    await asyncio.to_thread(
+                        mailer.send_access_request_email,
+                        owner_email=owner_email,
+                        requester_email=requester_email,
+                        doc_title=doc_title,
+                        review_url=review_url,
+                    )
+                    email_sent = True
+                    status = "request_sent"
+                except Exception as exc:
+                    logger.warning("Access request email failed: %s", exc)
+                    status = "request_saved"
+                    email_error = str(exc)
+            else:
+                status = "request_saved"
+                email_error = "SMTP is not configured on the server"
+        except ValueError as exc:
+            status = "denied"
+            email_error = str(exc)
+
+    if pending_accepted and not can_write:
+        can_read = storage.can_read(meta, user_ctx)
+        can_write = storage.can_write(meta, user_ctx)
+        role = storage.get_doc_role(meta, user_ctx)
+        if can_write:
+            status = "pending_accepted"
+
+    return {
+        "status": status,
+        "can_read": can_read,
+        "can_write": can_write,
+        "role": role,
+        "owner_email": owner_email,
+        "requester_email": requester_email,
+        "pending_shares_accepted": pending_accepted,
+        "pending_accept_errors": pending_errors,
+        "email_sent": email_sent,
+        "email_error": email_error,
+        "review_url": review_url,
+        "access_request_token": (access_record or {}).get("token"),
+    }
+
+
+@app.get("/access-requests/{token}", response_class=HTMLResponse)
+async def access_request_review_page(token: str, request: Request):
+    record = access_requests.get_request(token)
+    if not record:
+        return HTMLResponse(
+            access_request_ui.result_page(
+                title="Access request not found",
+                message="This link is invalid or has expired.",
+                tone="err",
+            ),
+            status_code=404,
+        )
+
+    user = await _optional_current_user(request)
+    logged_in_email = _user_email(user) if user else None
+    login_url = (
+        f"/api/oauth/login?redirect_to=/api/access-requests/{quote(token, safe='')}"
+    )
+    error = ""
+    mode = "login"
+    if user:
+        if not logged_in_email:
+            error = "Could not determine your account email."
+            mode = "readonly"
+        else:
+            meta = storage.get_document_meta(record.get("doc_id") or "")
+            if not meta:
+                error = "Document no longer exists."
+                mode = "readonly"
+            elif not _is_document_owner(meta, user):
+                error = (
+                    f"Only the document owner ({record.get('owner_email') or 'unknown'}) "
+                    "can respond to this request."
+                )
+                mode = "readonly"
+            else:
+                mode = "respond"
+
+    html = access_request_ui.review_page(
+        record=record,
+        mode=mode,
+        logged_in_email=logged_in_email,
+        login_url=login_url,
+        grant_action=f"/api/access-requests/{quote(token, safe='')}/grant",
+        deny_action=f"/api/access-requests/{quote(token, safe='')}/deny",
+        error=error,
+    )
+    return HTMLResponse(html)
+
+
+async def _resolve_access_request_as_owner(
+    token: str,
+    request: Request,
+    user: dict,
+) -> tuple[dict, dict, str]:
+    record = access_requests.get_request(token)
+    if not record:
+        raise HTTPException(status_code=404, detail="Access request not found")
+    if record.get("status") != "pending":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Request already {record.get('status')}",
+        )
+
+    meta = storage.get_document_meta(record.get("doc_id") or "")
+    if not meta:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    user_ctx = await _user_with_nextcloud_id(
+        user,
+        _request_access_token(request),
+    )
+    if not _is_document_owner(meta, user_ctx):
+        raise HTTPException(status_code=403, detail="Only the document owner can respond")
+
+    return record, meta, _request_access_token(request)
+
+
+@app.post("/access-requests/{token}/grant", response_class=HTMLResponse)
+async def grant_access_request(
+    token: str,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    try:
+        record, meta, access_token = await _resolve_access_request_as_owner(
+            token, request, user
+        )
+        await _grant_document_access(
+            record["doc_id"],
+            record["requester_email"],
+            record.get("requested_role") or "editor",
+            access_token,
+            _doc_nextcloud_path(meta),
+        )
+        access_requests.update_request_status(
+            token,
+            status="granted",
+            resolved_by=_user_email(user),
+        )
+        requester = record.get("requester_email") or "the user"
+        doc_title = record.get("doc_title") or record.get("doc_id") or "spreadsheet"
+        return HTMLResponse(
+            access_request_ui.result_page(
+                title="Access granted",
+                message=(
+                    f"Edit access to {doc_title} was granted to {requester}."
+                ),
+                tone="ok",
+            )
+        )
+    except HTTPException as exc:
+        return HTMLResponse(
+            access_request_ui.result_page(
+                title="Could not grant access",
+                message=exc.detail,
+                tone="err",
+            ),
+            status_code=exc.status_code,
+        )
+    except Exception as exc:
+        logger.exception("Grant access request failed")
+        return HTMLResponse(
+            access_request_ui.result_page(
+                title="Could not grant access",
+                message=str(exc),
+                tone="err",
+            ),
+            status_code=500,
+        )
+
+
+@app.post("/access-requests/{token}/deny", response_class=HTMLResponse)
+async def deny_access_request(
+    token: str,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    try:
+        record, _, _ = await _resolve_access_request_as_owner(token, request, user)
+        access_requests.update_request_status(
+            token,
+            status="denied",
+            resolved_by=_user_email(user),
+        )
+        requester = record.get("requester_email") or "the user"
+        doc_title = record.get("doc_title") or record.get("doc_id") or "spreadsheet"
+        return HTMLResponse(
+            access_request_ui.result_page(
+                title="Access denied",
+                message=(
+                    f"The request from {requester} for {doc_title} was denied."
+                ),
+                tone="warn",
+            )
+        )
+    except HTTPException as exc:
+        return HTMLResponse(
+            access_request_ui.result_page(
+                title="Could not deny request",
+                message=exc.detail,
+                tone="err",
+            ),
+            status_code=exc.status_code,
+        )
 
 
 @app.get("/docs/{doc_id}/tables")

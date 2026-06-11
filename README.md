@@ -121,6 +121,8 @@ If `NEXTCLOUD_FILES_DIR` is set to a subfolder name and that path is already a r
 
 **User share (required for picker):** User1 → Share → **Share with users** → full email `user2@example.com` (not “Copy link” alone). If Nextcloud requires share acceptance, open [Pending shares](https://<domain>/apps/files/pendingshares) or reload the API/iOS picker (auto-accept after deploy).
 
+**Access requests (iOS / API):** If User2 lacks edit access, the app can call `POST /api/docs/{doc_id}/request-access`. When SMTP is configured (`--email-user`, `--email-password`), the API emails the document owner a link to `https://<domain>/api/access-requests/{token}`. The owner signs in via `/api/oauth/login`, then chooses **Grant edit access** or **Deny**. Grant uses the same Nextcloud share flow as `POST /api/docs/{doc_id}/share` with role `editor`.
+
 **Troubleshooting:** As User2, open `https://<domain>/api/session-info` (while logged in). Check:
 - `nextcloud_pending_shares` — shares waiting for acceptance (API auto-accepts on list)
 - `nextcloud_shared_with_me_total` — accepted shares from OCS (0 = no user share to this account)
