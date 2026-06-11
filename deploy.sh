@@ -130,6 +130,8 @@ keycloak_request() {
   printf '%s' "$response"
 }
 
+KEYCLOAK_THEME_RESTART_REQUIRED=false
+
 deploy_keycloak_theme() {
   local theme_src="${DEPLOY_DIR}/keycloak/themes"
   [[ -d "$theme_src" ]] || fail "Keycloak themes dir missing: ${theme_src}"
@@ -146,6 +148,7 @@ deploy_keycloak_theme() {
       docker cp "${theme_src}/." "${container}:/opt/keycloak/themes/" >/dev/null
       log "Copied theme to ${container}:/opt/keycloak/themes/"
       copied=true
+      KEYCLOAK_THEME_RESTART_REQUIRED=true
     fi
   done
 
@@ -158,24 +161,55 @@ deploy_keycloak_theme() {
     fi
   done
 
-  if [[ "$copied" == true ]]; then
-    for container in nc-keycloak keycloak grist-keycloak; do
-      if docker ps --format '{{.Names}}' | grep -qx "$container"; then
-        docker restart "$container" >/dev/null 2>&1 || true
-      fi
-    done
-  else
+  if [[ "$copied" != true ]]; then
     warn "No local Keycloak container found; theme files are in ${theme_src}. Copy them to your Keycloak themes directory and set realm login theme to 'ssa'."
   fi
+}
+
+restart_keycloak_for_theme() {
+  [[ "${KEYCLOAK_THEME_RESTART_REQUIRED}" == true ]] || return 0
+
+  log "Restarting Keycloak to load login theme 'ssa'"
+  for container in nc-keycloak keycloak grist-keycloak; do
+    if docker ps --format '{{.Names}}' | grep -qx "$container"; then
+      docker restart "$container" >/dev/null 2>&1 || true
+    fi
+  done
+
+  for _ in $(seq 1 60); do
+    if curl -sfL "${KEYCLOAK_ADMIN_API_URL}/realms/master/.well-known/openid-configuration" >/dev/null 2>&1; then
+      success "Keycloak is ready after login theme deploy"
+      return 0
+    fi
+    sleep 5
+  done
+
+  warn "Keycloak did not become ready after theme restart; verify auth manually"
+}
+
+load_keycloak_realm_json() {
+  local token="$1"
+  local realm_json=""
+
+  if [[ -f /tmp/nc-keycloak-realm.json ]] && jq -e . >/dev/null 2>&1 < /tmp/nc-keycloak-realm.json; then
+    realm_json=$(cat /tmp/nc-keycloak-realm.json)
+  else
+    realm_json=$(keycloak_request GET "${KEYCLOAK_ADMIN_API_URL}/admin/realms/${KEYCLOAK_REALM}" \
+      -H "Authorization: Bearer ${token}")
+  fi
+
+  if ! printf '%s' "$realm_json" | jq -e . >/dev/null 2>&1; then
+    fail "Keycloak realm response is not valid JSON (first 200 chars): $(printf '%.200s' "$realm_json")"
+  fi
+
+  printf '%s' "$realm_json"
 }
 
 configure_keycloak_realm_theme() {
   local token="$1"
   local realm_json theme_payload theme_status
 
-  realm_json=$(curl -s \
-    -H "Authorization: Bearer ${token}" \
-    "${KEYCLOAK_ADMIN_API_URL}/admin/realms/${KEYCLOAK_REALM}")
+  realm_json=$(load_keycloak_realm_json "$token")
   [[ -n "$realm_json" ]] || fail "Could not load Keycloak realm '${KEYCLOAK_REALM}' for login theme configuration"
 
   theme_payload=$(printf '%s' "$realm_json" | jq '.loginTheme = "ssa"') \
@@ -747,9 +781,7 @@ fi
 configure_keycloak_realm_theme "$KC_TOKEN"
 
 if [[ -n "$EMAIL_USER" ]]; then
-  realm_json=$(curl -s \
-    -H "Authorization: Bearer ${KC_TOKEN}" \
-    "${KEYCLOAK_ADMIN_API_URL}/admin/realms/${KEYCLOAK_REALM}")
+  realm_json=$(load_keycloak_realm_json "$KC_TOKEN")
   [[ -n "$realm_json" ]] || fail "Could not load Keycloak realm '${KEYCLOAK_REALM}' for SMTP configuration"
 
   smtp_port="${EMAIL_PORT:-587}"
@@ -929,6 +961,8 @@ KC_CLIENT_SECRET_RESPONSE=$(keycloak_request GET "${KEYCLOAK_ADMIN_API_URL}/admi
   -H "Authorization: Bearer ${KC_TOKEN}")
 KC_CLIENT_SECRET=$(printf '%s' "$KC_CLIENT_SECRET_RESPONSE" | jq -r '.value // empty')
 [[ -n "$KC_CLIENT_SECRET" ]] || fail "Could not obtain nextcloud client secret from Keycloak"
+
+restart_keycloak_for_theme
 
 ensure_nextcloud_oidc_app
 occ_exec user_oidc:provider keycloak-ssa \
