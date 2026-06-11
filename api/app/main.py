@@ -922,8 +922,8 @@ def _doc_list_item(meta: dict, user: dict) -> dict:
     if role:
         item["role"] = role
     if role != "owner":
-        owner_label = (meta.get("owner_email") or "").strip()
-        if owner_label:
+        owner_label = (meta.get("owner_email") or "").strip().lower()
+        if mailer.is_deliverable_email(owner_label):
             item["owner_email"] = owner_label
     return item
 
@@ -1467,7 +1467,19 @@ async def request_doc_access(
 
     can_read = storage.can_read(meta, user_ctx)
     can_write = storage.can_write(meta, user_ctx)
-    owner_email = (meta.get("owner_email") or "").strip().lower() or None
+    owner_label = (meta.get("owner_email") or "").strip().lower() or None
+    owner_notification_email = None
+    if owner_label:
+        owner_notification_email = await nextcloud.resolve_notification_email(
+            owner_label,
+            access_token,
+        )
+        if (
+            owner_notification_email
+            and owner_notification_email != owner_label
+            and not mailer.is_deliverable_email(owner_label)
+        ):
+            storage.ensure_owner_email(doc_id, owner_notification_email)
     role = storage.get_doc_role(meta, user_ctx)
     doc_title = (meta.get("title") or meta.get("name") or doc_id).strip()
 
@@ -1480,7 +1492,7 @@ async def request_doc_access(
             "can_read": can_read,
             "can_write": can_write,
             "role": role,
-            "owner_email": owner_email,
+            "owner_email": owner_notification_email,
             "requester_email": requester_email,
             "pending_shares_accepted": pending_accepted,
             "pending_accept_errors": pending_errors,
@@ -1493,10 +1505,10 @@ async def request_doc_access(
     email_error = None
     review_url = None
 
-    if not owner_email:
+    if not owner_notification_email:
         status = "denied"
-        email_error = "Document owner email is unknown"
-    elif requester_email == owner_email:
+        email_error = mailer.user_facing_delivery_error()
+    elif requester_email == owner_notification_email:
         status = "denied"
         email_error = "You already own this document"
     else:
@@ -1505,14 +1517,14 @@ async def request_doc_access(
                 doc_id=doc_id,
                 doc_title=doc_title,
                 requester_email=requester_email,
-                owner_email=owner_email,
+                owner_email=owner_notification_email,
             )
             review_url = _access_request_review_url(access_record["token"])
             if mailer.smtp_configured():
                 try:
                     await asyncio.to_thread(
                         mailer.send_access_request_email,
-                        owner_email=owner_email,
+                        owner_email=owner_notification_email,
                         requester_email=requester_email,
                         doc_title=doc_title,
                         review_url=review_url,
@@ -1522,10 +1534,14 @@ async def request_doc_access(
                 except Exception as exc:
                     logger.warning("Access request email failed: %s", exc)
                     status = "request_saved"
-                    email_error = str(exc)
+                    email_error = (
+                        str(exc)
+                        if isinstance(exc, ValueError)
+                        else mailer.user_facing_delivery_error()
+                    )
             else:
                 status = "request_saved"
-                email_error = "SMTP is not configured on the server"
+                email_error = mailer.user_facing_delivery_error()
         except ValueError as exc:
             status = "denied"
             email_error = str(exc)
@@ -1542,7 +1558,7 @@ async def request_doc_access(
         "can_read": can_read,
         "can_write": can_write,
         "role": role,
-        "owner_email": owner_email,
+        "owner_email": owner_notification_email,
         "requester_email": requester_email,
         "pending_shares_accepted": pending_accepted,
         "pending_accept_errors": pending_errors,

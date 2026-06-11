@@ -46,6 +46,36 @@ class RequestAccessTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(response["can_write"])
         self.assertFalse(response["email_sent"])
 
+    async def test_request_access_denied_when_owner_is_not_deliverable_email(self):
+        request = MagicMock()
+        user = {"email": "user2@example.com"}
+        meta = {
+            "id": "doc-1",
+            "title": "Food Diary",
+            "owner_email": "3aa2e5d-f71c50bc969206a790f6eddf1d8557bd80b9a598b199c91713a85db2a",
+            "shared_with": {},
+        }
+
+        with patch.object(main.storage, "get_document_meta", return_value=meta), patch.object(
+            main, "_request_access_token", return_value="token"
+        ), patch.object(
+            main, "_user_with_nextcloud_id", new=AsyncMock(return_value=user)
+        ), patch.object(
+            main.nextcloud, "accept_all_pending_shares", new=AsyncMock(return_value=(0, []))
+        ), patch.object(
+            main.nextcloud,
+            "resolve_notification_email",
+            new=AsyncMock(return_value=None),
+        ), patch.object(main.storage, "can_read", return_value=False), patch.object(
+            main.storage, "can_write", return_value=False
+        ), patch.object(main.storage, "get_doc_role", return_value=None):
+            response = await main.request_doc_access("doc-1", request, user)
+
+        self.assertEqual(response["status"], "denied")
+        self.assertIsNone(response["owner_email"])
+        self.assertFalse(response["email_sent"])
+        self.assertNotIn("smtp", (response["email_error"] or "").lower())
+
     async def test_request_access_emails_owner_when_edit_access_missing(self):
         request = MagicMock()
         user = {"email": "user2@example.com"}
@@ -62,6 +92,10 @@ class RequestAccessTests(unittest.IsolatedAsyncioTestCase):
             main, "_user_with_nextcloud_id", new=AsyncMock(return_value=user)
         ), patch.object(
             main.nextcloud, "accept_all_pending_shares", new=AsyncMock(return_value=(0, []))
+        ), patch.object(
+            main.nextcloud,
+            "resolve_notification_email",
+            new=AsyncMock(return_value="owner@example.com"),
         ), patch.object(main.storage, "can_read", return_value=False), patch.object(
             main.storage, "can_write", return_value=False
         ), patch.object(main.storage, "get_doc_role", return_value=None), patch.object(

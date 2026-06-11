@@ -230,7 +230,7 @@ def ensure_owner_email(doc_id: str, owner_label: str) -> dict | None:
     if not label:
         return meta
     current = _normalize_email(meta.get("owner_email", ""))
-    if current:
+    if current and ("@" in current or "@" not in label):
         return meta
     meta = dict(meta)
     meta["owner_email"] = label

@@ -4,6 +4,8 @@ import secrets
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import mailer
+
 DATA_DIR = Path(os.getenv("DATA_DIR", "/data"))
 REQUESTED_ROLE = "editor"
 
@@ -37,6 +39,8 @@ def create_or_refresh_request(
     owner = _normalize_email(owner_email)
     if not requester or not owner:
         raise ValueError("requester_email and owner_email are required")
+    if not mailer.is_deliverable_email(owner):
+        raise ValueError("Document owner does not have a deliverable email address")
     if requester == owner:
         raise ValueError("owner cannot request access to their own document")
 

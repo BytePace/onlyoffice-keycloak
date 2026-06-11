@@ -593,6 +593,34 @@ def _normalize_share_identity(value: str) -> str:
     return (value or "").strip().lower()
 
 
+async def lookup_user_profile(user_id: str, access_token: str) -> dict:
+    """Fetch Nextcloud user profile by account id (may include email)."""
+    return await _ocs_user_profile(user_id, access_token)
+
+
+async def resolve_notification_email(user_id_or_email: str, access_token: str) -> str | None:
+    """
+    Return a deliverable mailbox for notifications.
+    Nextcloud owners are often stored as opaque user ids, not emails.
+    """
+    from . import mailer
+
+    raw = (user_id_or_email or "").strip().lower()
+    if not raw:
+        return None
+    if mailer.is_deliverable_email(raw):
+        return raw
+    try:
+        profile = await _ocs_user_profile(raw, access_token)
+    except Exception as exc:
+        logger.warning("Nextcloud profile lookup failed for %s: %s", raw, exc)
+        return None
+    email = (profile.get("email") or "").strip().lower()
+    if mailer.is_deliverable_email(email):
+        return email
+    return None
+
+
 async def _ocs_user_profile(user_id: str, access_token: str) -> dict:
     headers = {
         **_auth_headers(access_token),

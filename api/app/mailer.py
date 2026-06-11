@@ -1,10 +1,28 @@
 import logging
 import os
+import re
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 logger = logging.getLogger(__name__)
+
+_DELIVERABLE_EMAIL_RE = re.compile(
+    r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$"
+)
+
+
+def is_deliverable_email(address: str) -> bool:
+    """True when the value looks like a real mailbox (not a Nextcloud uid hash)."""
+    text = (address or "").strip().lower()
+    return bool(text and _DELIVERABLE_EMAIL_RE.fullmatch(text))
+
+
+def user_facing_delivery_error() -> str:
+    return (
+        "Could not send notification email to the document owner. "
+        "Ask the owner to share the spreadsheet with your account email."
+    )
 
 
 def smtp_configured() -> bool:
@@ -45,6 +63,10 @@ def send_access_request_email(
     if not smtp_configured():
         raise RuntimeError("SMTP is not configured (EMAIL_USER / EMAIL_PASSWORD)")
 
+    recipient = owner_email.strip().lower()
+    if not is_deliverable_email(recipient):
+        raise ValueError("Document owner does not have a deliverable email address")
+
     host, port, user, password, secure = _smtp_settings()
     subject = f"Access request: {doc_title}"
     text_body = (
@@ -69,7 +91,7 @@ def send_access_request_email(
     message = MIMEMultipart("alternative")
     message["Subject"] = subject
     message["From"] = _from_address()
-    message["To"] = owner_email.strip()
+    message["To"] = recipient
     message.attach(MIMEText(text_body, "plain", "utf-8"))
     message.attach(MIMEText(html_body, "html", "utf-8"))
 
@@ -86,5 +108,5 @@ def send_access_request_email(
             server.login(user, password)
             server.sendmail(message["From"], [message["To"]], message.as_string())
     except Exception as exc:
-        logger.exception("Failed to send access request email to %s", owner_email)
-        raise RuntimeError(f"Failed to send email: {exc}") from exc
+        logger.exception("Failed to send access request email to %s", recipient)
+        raise RuntimeError(user_facing_delivery_error()) from exc
