@@ -112,11 +112,6 @@ compose_volume_name() {
   printf '%s_%s' "${COMPOSE_PROJECT_NAME}" "${short_name}"
 }
 
-docker_volume_exists() {
-  local volume_name="$1"
-  docker volume inspect "$volume_name" >/dev/null 2>&1 || docker volume inspect "$(compose_volume_name "$volume_name")" >/dev/null 2>&1
-}
-
 load_env_value() {
   local var="$1"
   [[ -z "${!var}" && -f "$ENV_FILE" ]] || return 0
@@ -815,7 +810,7 @@ if [[ -n "$EMAIL_USER" ]]; then
         port: ($port | tostring),
         auth: "true",
         ssl: (if $port == 465 then "true" else "false" end),
-        starttls: (if $port == 465 then "false" else "true" end),
+        starttls: (if ($port == 465 or $port == 25) then "false" else "true" end),
         user: $user,
         password: $password,
         from: $user
