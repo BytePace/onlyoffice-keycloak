@@ -117,6 +117,14 @@ docker_volume_exists() {
   docker volume inspect "$volume_name" >/dev/null 2>&1 || docker volume inspect "$(compose_volume_name "$volume_name")" >/dev/null 2>&1
 }
 
+load_env_value() {
+  local var="$1"
+  [[ -z "${!var}" && -f "$ENV_FILE" ]] || return 0
+  local value
+  value="$(grep "^${var}=" "$ENV_FILE" | cut -d= -f2- || true)"
+  [[ -n "$value" ]] && printf -v "$var" '%s' "$value"
+}
+
 keycloak_request() {
   local method="$1"
   local url="$2"
@@ -190,16 +198,19 @@ restart_keycloak_for_theme() {
 load_keycloak_realm_json() {
   local token="$1"
   local realm_json=""
+  local cache="/tmp/nc-keycloak-realm.json"
 
-  if [[ -f /tmp/nc-keycloak-realm.json ]] && jq -e . >/dev/null 2>&1 < /tmp/nc-keycloak-realm.json; then
-    realm_json=$(cat /tmp/nc-keycloak-realm.json)
+  if [[ -f "$cache" ]] && jq -e '.realm != null and .error == null' "$cache" >/dev/null 2>&1; then
+    realm_json=$(cat "$cache")
   else
+    rm -f "$cache"
     realm_json=$(keycloak_request GET "${KEYCLOAK_ADMIN_API_URL}/admin/realms/${KEYCLOAK_REALM}" \
       -H "Authorization: Bearer ${token}")
+    printf '%s' "$realm_json" > "$cache"
   fi
 
-  if ! printf '%s' "$realm_json" | jq -e . >/dev/null 2>&1; then
-    fail "Keycloak realm response is not valid JSON (first 200 chars): $(printf '%.200s' "$realm_json")"
+  if ! printf '%s' "$realm_json" | jq -e '.realm != null and .error == null' >/dev/null 2>&1; then
+    fail "Keycloak realm response is not a realm (first 200 chars): $(printf '%.200s' "$realm_json")"
   fi
 
   printf '%s' "$realm_json"
@@ -336,6 +347,11 @@ if [[ "$ROLLBACK" == true ]]; then
 fi
 
 [[ -n "$APP_DOMAIN" ]] || fail "--domain is required"
+load_env_value NEXTCLOUD_ADMIN_PASSWORD
+load_env_value DB_PASSWORD
+load_env_value ONLYOFFICE_JWT_SECRET
+load_env_value KEYCLOAK_ADMIN_PASSWORD
+load_env_value POSTGRES_KEYCLOAK_PASSWORD
 [[ -n "$NEXTCLOUD_ADMIN_PASSWORD" ]] || NEXTCLOUD_ADMIN_PASSWORD="$(openssl rand -base64 18 | tr -dc 'A-Za-z0-9' | head -c 16)"
 [[ -n "$DB_PASSWORD" ]] || DB_PASSWORD="$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 20)"
 [[ -n "$ONLYOFFICE_JWT_SECRET" ]] || ONLYOFFICE_JWT_SECRET="$(openssl rand -hex 32)"
@@ -349,9 +365,6 @@ case "$KEYCLOAK_MODE" in
   new)
     [[ -n "$AUTH_DOMAIN" ]] || fail "--auth-domain is required for --keycloak-mode new"
     [[ -n "$KEYCLOAK_ADMIN_PASSWORD" ]] || KEYCLOAK_ADMIN_PASSWORD="$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 20)"
-    if [[ -z "$POSTGRES_KEYCLOAK_PASSWORD" && -f "$ENV_FILE" ]] && docker_volume_exists nc-keycloak-db; then
-      POSTGRES_KEYCLOAK_PASSWORD="$(grep '^POSTGRES_KEYCLOAK_PASSWORD=' "$ENV_FILE" | cut -d= -f2- || true)"
-    fi
     [[ -n "$POSTGRES_KEYCLOAK_PASSWORD" ]] || POSTGRES_KEYCLOAK_PASSWORD="$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 20)"
     KEYCLOAK_URL="https://${AUTH_DOMAIN}"
     KEYCLOAK_ADMIN_API_URL="http://127.0.0.1:${KC_PORT}"
@@ -774,6 +787,7 @@ KC_REALM_STATUS=$(curl -s -o /tmp/nc-keycloak-realm.json -w "%{http_code}" \
 deploy_keycloak_theme
 
 if [[ "$KC_REALM_STATUS" == "404" ]]; then
+  rm -f /tmp/nc-keycloak-realm.json
   keycloak_request POST "${KEYCLOAK_ADMIN_API_URL}/admin/realms" \
     -H "Authorization: Bearer ${KC_TOKEN}" \
     -H "Content-Type: application/json" \
@@ -798,9 +812,10 @@ if [[ -n "$EMAIL_USER" ]]; then
     --arg password "$EMAIL_PASSWORD" '
       .smtpServer = {
         host: $host,
-        port: $port,
-        auth: true,
-        starttls: true,
+        port: ($port | tostring),
+        auth: "true",
+        ssl: (if $port == 465 then "true" else "false" end),
+        starttls: (if $port == 465 then "false" else "true" end),
         user: $user,
         password: $password,
         from: $user
