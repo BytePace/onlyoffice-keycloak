@@ -14,6 +14,7 @@ server {
     ssl_ciphers         HIGH:!aNULL:!MD5;
 
     client_max_body_size 1024M;
+    large_client_header_buffers 8 64k;
     proxy_read_timeout 3600;
     proxy_send_timeout 3600;
 
@@ -39,7 +40,6 @@ server {
         proxy_buffer_size          128k;
         proxy_buffers              8 256k;
         proxy_busy_buffers_size    256k;
-        large_client_header_buffers 8 64k;
         proxy_set_header   Host              $host;
         proxy_set_header   X-Real-IP         $remote_addr;
         proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
